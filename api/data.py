@@ -12,8 +12,8 @@ import numpy as np
 
 import sys
 import os
-sys.path.insert(0, os.path.dirname(__file__))
-from engines.score_engine import calculate_full_score
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+from engines.score_engine import run_score_engine
 STARTING_BALANCE = 2000.0
 
 def norm_cdf(x):
@@ -32,6 +32,7 @@ ALPACA_HEADERS = {
     "APCA-API-KEY-ID": os.getenv("APCA_API_KEY_ID", ""),
     "APCA-API-SECRET-KEY": os.getenv("APCA_API_SECRET_KEY", ""),
 }
+NY = pytz.timezone("America/New_York")
 
 
 class SafeEncoder(json.JSONEncoder):
@@ -295,16 +296,33 @@ class handler(BaseHTTPRequestHandler):
                 "portfolio": load_portfolio()
             }
             
-            score_result = calculate_full_score(engine_data)
+            t_min = now.hour * 60 + now.minute
+            is_regular = 570 <= t_min <= 960
+            portfolio = load_portfolio()
+            score_result = run_score_engine(
+                now_et=now,
+                spy_price=spy_p,
+                vix_price=vix_p,
+                vix3m_price=vix3m_p,
+                prev_close=spy_prev,
+                vwap=vwap,
+                vol_ratio=vol_r,
+                range_value=d_range,
+                pcts=pcts_data,
+                spy_history=spy_h,
+                portfolio=portfolio,
+                session_name="REGULAR" if is_regular else "CLOSED",
+            )
             
             # Extract variables for paper trading & output
             normalized = score_result["total_score"]
-            raw_total = score_result["raw_total"]
+            raw_total = score_result["raw_score"]
             active_max = score_result["max_score"]
-            direction_bias = score_result["direction"]
+            direction_bias = score_result["direction_bias"]
             
             # Map new 140-point grade to legacy signal dict
-            grade = score_result["grade"]
+            signal = score_result["signal"]
+            grade = signal["grade"]
             if grade == "STRONG": signal = {"grade": "STRONG", "label": "STRONG SIGNAL", "emoji": "🟢", "action": "Full position", "color": "#3dd68c"}
             elif grade == "MODERATE": signal = {"grade": "MODERATE", "label": "MODERATE SIGNAL", "emoji": "🟡", "action": "Half position", "color": "#f5c451"}
             elif grade == "WEAK": signal = {"grade": "WEAK", "label": "STANDBY", "emoji": "🟠", "action": "Monitor only", "color": "#f5a623"}
@@ -345,7 +363,7 @@ class handler(BaseHTTPRequestHandler):
 
             # 2. Check for entry
             open_pos = portfolio.get("positions", {}).get(today_str)
-            if not open_pos and grade == "STRONG" and score_result["layers"].get("layer5_time_window", {}).get("score", 0) >= 20:
+            if not open_pos and grade == "STRONG" and score_result["layers"].get("time_window", {}).get("score", 0) >= 20:
                 # Open Debit Spread
                 iv = vix_val / 100.0
                 opt = "call" if direction_bias == "CALL" else "put"
@@ -425,7 +443,7 @@ class handler(BaseHTTPRequestHandler):
                     closed = True
                     
                 if closed:
-                    open_pos = _close_trade(open_pos, now, spy_p, open_pos["exit_val"], exit_type)
+                    open_pos = _close_trade(open_pos, now, spy_p, open_pos["exit_val"], open_pos["exit_type"])
                     portfolio["cash"] += open_pos["revenue"]
                     portfolio["history"].insert(0, open_pos.copy())
                     _append_trade_event(portfolio, {
@@ -461,7 +479,7 @@ class handler(BaseHTTPRequestHandler):
                 "window": {"val": now.strftime("%H:%M"), "ok": is_regular},
                 "vwap": {"val": f"${spy_p - vwap:+.2f}", "ok": spy_p > vwap},
                 "vol": {"val": f"{vol_r:.2f}x", "ok": vol_r >= 1.5},
-                "sector": {"val": "SYNC" if score_result["layers"].get("layer4_correlation", {}).get("sector_sync") else "DIFF", "ok": score_result["layers"].get("layer4_correlation", {}).get("sector_sync")}
+                "sector": {"val": "SYNC" if score_result["layers"].get("correlation", {}).get("sector_sync") else "DIFF", "ok": score_result["layers"].get("correlation", {}).get("sector_sync")}
             }
 
             latency = round((time.perf_counter() - start_time) * 1000, 1)
@@ -496,7 +514,7 @@ class handler(BaseHTTPRequestHandler):
                 "last_updated": ts, "fetch_status": "SUCCESS", "latency_ms": latency,
                 "data_source": "ALPACA",
                 "session": "REGULAR" if is_regular else "CLOSED",
-                "briefing": f"{score_result['layers']['layer5_time_window']['emoji']} [{score_result['layers']['layer5_time_window']['window']}] Regime: {score_result['layers']['layer2_regime']['regime']} | Bias: {direction_bias} | Score: {normalized}/100",
+                "briefing": f"{score_result['layers']['time_window']['emoji']} [{score_result['layers']['time_window']['window']}] Regime: {score_result['layers']['regime']['regime']} | Bias: {direction_bias} | Score: {normalized}/100",
                 "total_score": normalized, "max_score": active_max, "raw_score": raw_total,
                 "signal": signal, "direction_bias": direction_bias,
                 "layers": score_result["layers"],
