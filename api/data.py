@@ -1,9 +1,10 @@
 """
 Vercel Serverless API — /api/data
 SPY 0DTE Signal Machine — 7-Layer Score Engine
-Hybrid: Alpaca (stocks) + yfinance (VIX fallback)
+Hybrid: Alpaca (stocks) + Yahoo quote (VIX); options priced via BS, not chain fetch
 """
 import math, json, os, time, traceback
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from http.server import BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 import pytz, requests
@@ -34,6 +35,9 @@ ALPACA_HEADERS = {
     "APCA-API-KEY-ID": os.getenv("APCA_API_KEY_ID", ""),
     "APCA-API-SECRET-KEY": os.getenv("APCA_API_SECRET_KEY", ""),
 }
+_VIX_CACHE = {"at": 0.0, "vix": 18.0, "vix3m": None}
+VIX_CACHE_SEC = int(os.getenv("VIX_CACHE_SEC", "45"))
+YAHOO_UA = "Mozilla/5.0 (compatible; SPY0DTE/1.0)"
 
 
 class SafeEncoder(json.JSONEncoder):
@@ -56,23 +60,26 @@ def _alpaca_snapshots(symbols):
     """Fetch latest snapshots for multiple stock symbols."""
     url = f"{ALPACA_DATA_URL}/v2/stocks/snapshots"
     r = requests.get(url, headers=ALPACA_HEADERS,
-                     params={"symbols": ",".join(symbols), "feed": "iex"}, timeout=10)
+                     params={"symbols": ",".join(symbols), "feed": "iex"}, timeout=5)
     r.raise_for_status()
     return r.json()
 
 
 def _alpaca_bars(symbol, timeframe="5Min"):
-    """Fetch intraday bars for technical analysis."""
+    """Fetch intraday bars for technical analysis (capped for latency)."""
     now = datetime.now(NY)
     start = now.replace(hour=4, minute=0, second=0, microsecond=0)
+    minutes = max(30, int((now - start).total_seconds() // 60))
+    bar_limit = min(160, max(40, minutes // 5 + 25))
     url = f"{ALPACA_DATA_URL}/v2/stocks/{symbol}/bars"
     r = requests.get(url, headers=ALPACA_HEADERS, params={
         "timeframe": timeframe, "start": start.isoformat(),
-        "limit": 1000, "adjustment": "raw", "feed": "iex",
-    }, timeout=10)
+        "limit": bar_limit, "adjustment": "raw", "feed": "iex",
+    }, timeout=5)
     r.raise_for_status()
     bars = r.json().get("bars", [])
-    if not bars: return pd.DataFrame()
+    if not bars:
+        return pd.DataFrame()
     df = pd.DataFrame(bars)
     df = df.rename(columns={"o": "Open", "h": "High", "l": "Low",
                              "c": "Close", "v": "Volume", "t": "Timestamp"})
@@ -80,18 +87,64 @@ def _alpaca_bars(symbol, timeframe="5Min"):
 
 
 def _vix_fallback():
-    """Fetch VIX/VIX3M from yfinance (Alpaca doesn't provide CBOE indices)."""
-    import yfinance as yf
-    vix_p, vix3m_p = 18.0, None
+    """Fast VIX/VIX3M via Yahoo quote API + short TTL cache."""
+    now = time.time()
+    if now - _VIX_CACHE["at"] < VIX_CACHE_SEC:
+        return _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+
+    vix_p, vix3m_p = _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
     try:
-        v = yf.Ticker("^VIX").fast_info.last_price
-        if v is not None and not pd.isna(v): vix_p = float(v)
-    except: pass
-    try:
-        v = yf.Ticker("^VIX3M").fast_info.last_price
-        if v is not None and not pd.isna(v): vix3m_p = float(v)
-    except: pass
+        r = requests.get(
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            params={"symbols": "^VIX,^VIX3M"},
+            headers={"User-Agent": YAHOO_UA},
+            timeout=4,
+        )
+        if r.status_code == 200:
+            for q in r.json().get("quoteResponse", {}).get("result", []):
+                sym = q.get("symbol")
+                px = q.get("regularMarketPrice")
+                if px is None:
+                    continue
+                if sym == "^VIX":
+                    vix_p = float(px)
+                elif sym == "^VIX3M":
+                    vix3m_p = float(px)
+    except Exception:
+        pass
+
+    _VIX_CACHE.update({"at": now, "vix": vix_p, "vix3m": vix3m_p})
     return vix_p, vix3m_p
+
+
+def _fetch_market_bundle(all_stocks):
+    """Parallel market data fetch (snapshots, bars, VIX, portfolio)."""
+    timing = {}
+    out = {"snaps": {}, "spy_h": pd.DataFrame(), "vix": (18.0, None), "portfolio": _default_pf()}
+
+    def _timed(name, fn, *args):
+        t0 = time.perf_counter()
+        try:
+            return fn(*args)
+        finally:
+            timing[name] = round((time.perf_counter() - t0) * 1000, 1)
+
+    tasks = {
+        "snaps": lambda: _timed("snapshots_ms", _alpaca_snapshots, all_stocks),
+        "spy_h": lambda: _timed("bars_ms", _alpaca_bars, "SPY", "5Min"),
+        "vix": lambda: _timed("vix_ms", _vix_fallback),
+        "portfolio": lambda: _timed("portfolio_ms", load_portfolio),
+    }
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = {pool.submit(fn): key for key, fn in tasks.items()}
+        for fut in as_completed(futures):
+            key = futures[fut]
+            try:
+                out[key] = fut.result()
+            except Exception as exc:
+                timing[f"{key}_error"] = str(exc)
+    out["timing_ms"] = timing
+    return out
 
 
 def _snap_price(snap, key="latestTrade"):
@@ -133,15 +186,16 @@ def _calculate_strike_recommendation(spy_price, direction_bias, signal_grade,
         otm_1, otm_2 = atm_strike - 1, atm_strike - 2
         contract_type, type_label = "P", "PUT"
     contract_label = f"SPY ${recommended_strike}{contract_type} 0DTE"
-    # Estimate premium from VIX
+    # BS estimate from VIX (no external options chain fetch)
     vix_val = vix_price if vix_price else 18.0
-    time_factor = math.sqrt(1.0 / 365.0)
-    atm_est = spy_price * (vix_val / 100.0) * time_factor * 0.5
-    otm_discount = max(0.3, 1.0 - (otm_offset * 0.25))
+    iv = vix_val / 100.0
+    T = max(1.0 / (252.0 * 6.5), 1e-4)
+    opt = "call" if contract_type == "C" else "put"
+    atm_est = bs_price(spy_price, recommended_strike, T, 0.05, iv, opt)
+    otm_discount = max(0.35, 1.0 - (otm_offset * 0.2))
     mid_premium = max(round(atm_est * otm_discount, 2), 0.05)
     est_premium_low = max(round(mid_premium * 0.85, 2), 0.01)
     est_premium_high = max(round(mid_premium * 1.15, 2), 0.10)
-    data_source = "ESTIMATED"
     target_pct, stop_pct = 50, 30
     target_price = round(mid_premium * 1.5, 2)
     stop_price = round(mid_premium * 0.7, 2)
@@ -162,7 +216,7 @@ def _calculate_strike_recommendation(spy_price, direction_bias, signal_grade,
             {"label": "OTM-2", "strike": otm_2, "recommended": otm_offset == 2},
         ],
         "est_premium_low": est_premium_low, "est_premium_high": est_premium_high,
-        "mid_premium": mid_premium, "data_source": data_source,
+        "mid_premium": mid_premium, "data_source": "BS_ESTIMATE",
         "real_bid": None, "real_ask": None, "real_last": None,
         "target_pct": target_pct, "stop_pct": stop_pct,
         "target_price": target_price, "stop_price": stop_price,
@@ -621,17 +675,15 @@ class handler(BaseHTTPRequestHandler):
         ALL_STOCKS = STOCK_SYMS + MAG7 + GME_STOCK
 
         try:
-            # ── FETCH: Alpaca snapshots (all stocks in one call) ──
-            snaps = _alpaca_snapshots(ALL_STOCKS)
+            bundle = _fetch_market_bundle(ALL_STOCKS)
+            snaps = bundle["snaps"] or {}
+            spy_h = bundle["spy_h"]
+            vix_p, vix3m_p = bundle["vix"]
+            portfolio = bundle["portfolio"]
+            fetch_timing = bundle.get("timing_ms", {})
 
             spy_p = _snap_price(snaps.get("SPY", {}))
             spy_prev = _snap_prev_close(snaps.get("SPY", {})) or spy_p
-
-            # ── FETCH: Alpaca 5-min bars for SPY ──
-            spy_h = _alpaca_bars("SPY", "5Min")
-
-            # ── FETCH: VIX from yfinance fallback ──
-            vix_p, vix3m_p = _vix_fallback()
 
             # ── Percentage changes from snapshots ──
             pcts_data = {}
@@ -655,7 +707,6 @@ class handler(BaseHTTPRequestHandler):
             # ── CALL SCORE ENGINE (Modular 140-point system) ──
             t_min = now.hour * 60 + now.minute
             is_regular = 570 <= t_min <= 960
-            portfolio = load_portfolio()
             score_result = run_score_engine(
                 now_et=now,
                 spy_price=spy_p,
@@ -862,6 +913,7 @@ class handler(BaseHTTPRequestHandler):
 
             final = {
                 "last_updated": ts, "fetch_status": "SUCCESS", "latency_ms": latency,
+                "timing_ms": fetch_timing,
                 "data_source": "ALPACA",
                 "session": "REGULAR" if is_regular else "CLOSED",
                 "briefing": f"{score_result['layers']['time_window']['emoji']} [{score_result['layers']['time_window']['window']}] Regime: {score_result['layers']['regime']['regime']} | Bias: {direction_bias} | Score: {normalized}/100",
