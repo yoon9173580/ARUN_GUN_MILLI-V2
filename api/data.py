@@ -12,7 +12,7 @@ import numpy as np
 
 import sys
 import os
-sys.path.append(os.path.dirname(__file__))
+sys.path.insert(0, os.path.dirname(__file__))
 from engines.score_engine import calculate_full_score
 STARTING_BALANCE = 2000.0
 
@@ -191,8 +191,13 @@ def save_portfolio(pf):
         for p in pf.get("positions", {}).values():
             pf["current_value"] += p.get("cost", 0)
         pf["total_return_pct"] = round(((pf["current_value"] / pf["initial_balance"]) - 1) * 100, 2)
-        requests.put(KV_URL, json={"name":"arungun_portfolio", "data":pf}, timeout=3)
-    except: pass
+        payload = json.loads(json.dumps({"name": "arungun_portfolio", "data": pf}, cls=SafeEncoder))
+        r = requests.put(KV_URL, json=payload, timeout=5)
+        r.raise_for_status()
+        return True
+    except Exception as e:
+        pf["_save_error"] = str(e)
+        return False
 
 
 # ── Handler ─────────────────────────────────────────────────────────
