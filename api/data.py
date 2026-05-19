@@ -13,6 +13,17 @@ import numpy as np
 NY = pytz.timezone("America/New_York")
 STARTING_BALANCE = 2000.0
 
+def norm_cdf(x):
+    return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
+
+def bs_price(S, K, T, r, sigma, opt="call"):
+    if T <= 0: return max(S - K, 0) if opt == "call" else max(K - S, 0)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma**2) * T) / (sigma * math.sqrt(T))
+    d2 = d1 - sigma * math.sqrt(T)
+    if opt == "call":
+        return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
+    return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
+
 ALPACA_DATA_URL = "https://data.alpaca.markets"
 ALPACA_HEADERS = {
     "APCA-API-KEY-ID": os.getenv("APCA_API_KEY_ID", ""),
@@ -225,13 +236,30 @@ def _calculate_strike_recommendation(spy_price, direction_bias, signal_grade,
         "max_risk_pct": max_risk_pct, "reasoning": strike_reasoning,
     }
 
+KV_URL = "https://api.restful-api.dev/objects/ff8081819d82fab6019e405b84415410"
+
+def _default_pf():
+    return {"cash": STARTING_BALANCE, "positions": {}, "history": [], "initial_balance": STARTING_BALANCE, "current_value": STARTING_BALANCE, "total_return_pct": 0.0}
+
 def load_portfolio():
     try:
-        raw = os.getenv("PAPER_PORTFOLIO", "")
-        if raw: return json.loads(raw)
+        r = requests.get(KV_URL, timeout=3)
+        if r.status_code == 200:
+            data = r.json().get("data", {})
+            if "cash" in data: return data
     except: pass
-    return {"cash": STARTING_BALANCE, "positions": {}, "history": [],
-            "initial_balance": STARTING_BALANCE, "current_value": STARTING_BALANCE, "total_return_pct": 0.0}
+    return _default_pf()
+
+def save_portfolio(pf):
+    try:
+        # Update portfolio metrics
+        pf["current_value"] = pf["cash"]
+        # Add value of open positions
+        for p in pf.get("positions", {}).values():
+            pf["current_value"] += p.get("cost", 0)
+        pf["total_return_pct"] = round(((pf["current_value"] / pf["initial_balance"]) - 1) * 100, 2)
+        requests.put(KV_URL, json={"name":"arungun_portfolio", "data":pf}, timeout=3)
+    except: pass
 
 
 # ── Handler ─────────────────────────────────────────────────────────
@@ -338,7 +366,88 @@ class handler(BaseHTTPRequestHandler):
                          }}
 
             # ── LAYER 7: Risk ──
+            # ── PAPER TRADING EXECUTION ──
             portfolio = load_portfolio()
+            today_str = now.strftime("%Y-%m-%d")
+            vix_val = vix_p if vix_p > 0 else 18.0
+            
+            # 1. Clean up stale positions from previous days
+            to_remove = []
+            for date_key, pos in portfolio.get("positions", {}).items():
+                if date_key != today_str:
+                    pos["exit_val"] = 0
+                    pos["pnl"] = -pos.get("cost", 0)
+                    pos["exit_type"] = "EOD"
+                    portfolio["history"].insert(0, pos)
+                    to_remove.append(date_key)
+            if to_remove:
+                for k in to_remove: del portfolio["positions"][k]
+                save_portfolio(portfolio)
+
+            # 2. Check for entry
+            open_pos = portfolio.get("positions", {}).get(today_str)
+            if not open_pos and signal["grade"] == "STRONG" and "PRIME" in time_win["window"]:
+                # Open Debit Spread
+                iv = vix_val / 100.0
+                opt = "call" if direction_bias == "CALL" else "put"
+                K_buy = round(spy_p)
+                K_sell = K_buy + 5 if opt == "call" else K_buy - 5
+                
+                T_entry = 5.5 / (252 * 6.5)
+                lp = bs_price(spy_p, K_buy, T_entry, 0.05, iv, opt)
+                sp = bs_price(spy_p, K_sell, T_entry, 0.05, iv, opt)
+                net_debit = (lp - sp) * 1.03 + 0.04
+                
+                if net_debit > 0.05:
+                    risk_pct = 0.10 if normalized >= 95 else (0.08 if vix_val >= 25 else (0.06 if vix_val >= 20 else 0.05))
+                    max_risk = portfolio["cash"] * risk_pct
+                    contracts = max(1, int(max_risk / (net_debit * 100)))
+                    
+                    if contracts > 0:
+                        cost = round(net_debit * 100 * contracts, 2)
+                        new_pos = {
+                            "date": today_str, "score": normalized, "grade": signal["grade"],
+                            "direction": direction_bias, "K_buy": K_buy, "K_sell": K_sell,
+                            "net_debit": round(net_debit, 2), "contracts": contracts, "cost": cost,
+                            "entry_spy": round(spy_p, 2), "time": now.strftime("%H:%M")
+                        }
+                        portfolio["positions"][today_str] = new_pos
+                        portfolio["cash"] -= cost
+                        save_portfolio(portfolio)
+
+            # 3. Check for exit (TP 100% or EOD)
+            open_pos = portfolio.get("positions", {}).get(today_str)
+            if open_pos:
+                iv = vix_val / 100.0
+                opt = "call" if open_pos["direction"] == "CALL" else "put"
+                hours_rem = max(0.1, 16.0 - (now.hour + now.minute/60.0))
+                T_rem = hours_rem / (252 * 6.5)
+                
+                lp = bs_price(spy_p, open_pos["K_buy"], T_rem, 0.05, iv, opt)
+                sp = bs_price(spy_p, open_pos["K_sell"], T_rem, 0.05, iv, opt)
+                current_val = max(0, lp - sp) * 0.97 - 0.04
+                
+                tp_price = open_pos["net_debit"] * 2.0
+                closed = False
+                
+                if current_val >= tp_price:
+                    open_pos["exit_val"] = tp_price
+                    open_pos["exit_type"] = "TP"
+                    closed = True
+                elif not is_regular or now.hour >= 16:
+                    open_pos["exit_val"] = max(0, current_val)
+                    open_pos["exit_type"] = "EOD"
+                    closed = True
+                    
+                if closed:
+                    revenue = round(open_pos["exit_val"] * 100 * open_pos["contracts"], 2)
+                    portfolio["cash"] += revenue
+                    open_pos["pnl"] = round(revenue - open_pos["cost"], 2)
+                    open_pos["exit_spy"] = round(spy_p, 2)
+                    portfolio["history"].insert(0, open_pos)
+                    del portfolio["positions"][today_str]
+                    save_portfolio(portfolio)
+
             risk = {"passed": True, "score": 0, "lockout": False, "lockout_reason": None,
                     "strikes_remaining": 3, "trades_remaining": 3, "daily_drawdown": 0, "details": {}}
 

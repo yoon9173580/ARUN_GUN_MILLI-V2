@@ -74,7 +74,10 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
 .pt-label{font-size:0.6rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em}
 .pt-value{font-size:1.2rem;font-weight:700}
 .pt-positions{margin-top:0.8rem;padding-top:0.6rem;border-top:1px dashed var(--border);font-size:0.75rem;color:#a0a5b5}
-
+.pt-history-title{font-size:0.65rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-top:1rem;margin-bottom:0.4rem;font-weight:700}
+.pt-history-list{display:flex;flex-direction:column;gap:4px;max-height:200px;overflow-y:auto;padding-right:4px}
+.pt-hist-item{display:flex;justify-content:space-between;background:rgba(255,255,255,0.02);padding:0.4rem 0.6rem;border-radius:6px;font-size:0.7rem;border:1px solid transparent}
+.pt-hist-item:hover{background:rgba(255,255,255,0.04);border-color:var(--border)}
 /* Legacy Rule List */
 .rule-list{background:var(--surface);backdrop-filter:blur(20px);border:1px solid var(--border);border-radius:16px;padding:1rem;margin-bottom:1.2rem}
 .rule-item{display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid rgba(255,255,255,0.03);font-size:0.78rem}
@@ -239,15 +242,17 @@ if(sessionStorage.getItem('spy_auth')==='1') document.getElementById('authGate')
   <!-- Paper Trading -->
   <div class="pt-box" id="paperTradingWidget" style="display:none">
     <div class="pt-header">
-      <div class="pt-title">Paper Trading Bot</div>
+      <div class="pt-title">Paper Trading Log</div>
       <div id="ptReturn" class="badge">--</div>
     </div>
     <div class="pt-grid">
       <div class="pt-stat"><span class="pt-label">Account Value</span><span class="pt-value mono" id="ptValue">--</span></div>
-      <div class="pt-stat"><span class="pt-label">Target</span><span class="pt-value" style="color:var(--cyan)">SPY 0DTE</span></div>
+      <div class="pt-stat"><span class="pt-label">Strategy</span><span class="pt-value" style="color:var(--cyan);font-size:0.9rem">Debit Spread v3</span></div>
       <div class="pt-stat"><span class="pt-label">Cash</span><span class="pt-value mono" id="ptCash">--</span></div>
     </div>
     <div class="pt-positions mono" id="ptPositions">No active positions.</div>
+    <div class="pt-history-title">Recent Trades</div>
+    <div class="pt-history-list mono" id="ptHistory">No trades yet.</div>
   </div>
 
   <!-- Legacy Compliance -->
@@ -466,23 +471,40 @@ function render(py) {
     const retPct = pt.total_return_pct || 0;
     retBadge.textContent = (retPct>=0?'+':'') + retPct.toFixed(2) + '% All Time';
     retBadge.className = 'badge ' + (retPct>=0?'pass':'fail');
-    let posHtml = '';
-    if (pt.positions) {
-      Object.entries(pt.positions).forEach(([sym, data]) => {
-        if (data.shares > 0) {
-          let currentP = py.indices?.[sym]?.price || py.mag7?.[sym]?.price || 0;
-          let pnlStr = '';
-          if (currentP > 0) {
-            const pnl = (currentP - data.avg_price) * data.shares;
-            const pnlPct = ((currentP / data.avg_price) - 1) * 100;
-            const clr = pnl >= 0 ? 'var(--go)' : 'var(--stop)';
-            pnlStr = ` | PnL: <span style="color:${clr}">${pnl>=0?'+':''}$${pnl.toFixed(2)} (${pnl>=0?'+':''}${pnlPct.toFixed(2)}%)</span>`;
-          }
-          posHtml += `<div>[HOLD] ${data.shares}x ${sym} @ $${data.avg_price.toFixed(2)}${pnlStr}</div>`;
-        }
-      });
+    
+    // Render Active Positions
+    const pos = Object.values(pt.positions || {});
+    if(pos.length > 0) {
+      document.getElementById('ptPositions').innerHTML = pos.map(p => 
+        `<div style="display:flex;justify-content:space-between;color:var(--text);margin-bottom:4px">
+          <span><span style="color:${p.direction==='CALL'?'var(--go)':'var(--stop)'};font-weight:700">[${p.direction}]</span> ${p.K_buy}/${p.K_sell} <span style="color:var(--muted);font-size:0.7rem">x${p.contracts}</span></span>
+          <span style="color:var(--info);font-weight:700">$${(p.cost||0).toFixed(2)}</span>
+        </div>`
+      ).join('');
+    } else {
+      document.getElementById('ptPositions').innerHTML = '<span style="color:var(--muted)">No active positions.</span>';
     }
-    document.getElementById('ptPositions').innerHTML = posHtml || 'No active positions.';
+
+    // Render History Log
+    const hist = pt.history || [];
+    if(hist.length > 0) {
+      document.getElementById('ptHistory').innerHTML = hist.map(h => {
+        const isWin = h.pnl > 0;
+        return `<div class="pt-hist-item">
+          <span>
+            <span style="color:var(--muted);margin-right:8px">${h.date.substring(5)}</span>
+            <span style="color:${h.direction==='CALL'?'var(--go)':'var(--stop)'};font-weight:700">${h.direction}</span>
+            <span style="margin-left:4px;color:#a0a5b5">${h.K_buy}/${h.K_sell}</span>
+          </span>
+          <span style="text-align:right">
+            <span style="color:var(--muted);font-size:0.6rem;margin-right:6px">[${h.exit_type}]</span>
+            <span style="color:${isWin?'var(--go)':'var(--stop)'};font-weight:700">${isWin?'+':''}$${(h.pnl||0).toFixed(0)}</span>
+          </span>
+        </div>`;
+      }).join('');
+    } else {
+      document.getElementById('ptHistory').innerHTML = '<span style="color:var(--muted)">No trades yet.</span>';
+    }
   }
 }
 
