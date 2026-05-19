@@ -366,6 +366,21 @@ class handler(BaseHTTPRequestHandler):
                          }}
 
             # ── LAYER 7: Risk ──
+            risk = {"passed": True, "score": 0, "lockout": False, "lockout_reason": None,
+                    "strikes_remaining": 3, "trades_remaining": 3, "daily_drawdown": 0, "details": {}}
+
+            # ── TOTAL SCORE ──
+            raw_total = regime_total + corr_score + time_win["score"] + tech_total
+            active_max = 40 + 20 + 20 + 30
+            normalized = max(0, int((raw_total / active_max) * 100)) if active_max > 0 else 0
+            signal = _signal_grade(normalized)
+
+            t_min = now.hour * 60 + now.minute
+            is_regular = 570 <= t_min <= 960
+            if not is_regular:
+                signal["label"] = "MARKET CLOSED"
+                signal["action"] = "Market not in session"
+
             # ── PAPER TRADING EXECUTION ──
             portfolio = load_portfolio()
             today_str = now.strftime("%Y-%m-%d")
@@ -447,21 +462,6 @@ class handler(BaseHTTPRequestHandler):
                     portfolio["history"].insert(0, open_pos)
                     del portfolio["positions"][today_str]
                     save_portfolio(portfolio)
-
-            risk = {"passed": True, "score": 0, "lockout": False, "lockout_reason": None,
-                    "strikes_remaining": 3, "trades_remaining": 3, "daily_drawdown": 0, "details": {}}
-
-            # ── TOTAL SCORE ──
-            raw_total = regime_total + corr_score + time_win["score"] + tech_total
-            active_max = 40 + 20 + 20 + 30
-            normalized = max(0, int((raw_total / active_max) * 100)) if active_max > 0 else 0
-            signal = _signal_grade(normalized)
-
-            t_min = now.hour * 60 + now.minute
-            is_regular = 570 <= t_min <= 960
-            if not is_regular:
-                signal["label"] = "MARKET CLOSED"
-                signal["action"] = "Market not in session"
 
             rules = {
                 "vix": {"val": f"{vix_p:.2f}", "ok": vix_p >= 14},
