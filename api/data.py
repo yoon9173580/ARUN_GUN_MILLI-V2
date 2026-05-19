@@ -7,6 +7,8 @@ import math, json, os, time, traceback
 from http.server import BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 import pytz, requests
+
+NY = pytz.timezone("America/New_York")
 import pandas as pd
 import numpy as np
 
