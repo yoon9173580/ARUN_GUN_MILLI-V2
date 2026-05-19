@@ -10,7 +10,10 @@ import pytz, requests
 import pandas as pd
 import numpy as np
 
-NY = pytz.timezone("America/New_York")
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+from engines.score_engine import calculate_full_score
 STARTING_BALANCE = 2000.0
 
 def norm_cdf(x):
@@ -102,77 +105,7 @@ def _pct(price, prev):
     return ((price / prev) - 1) * 100 if prev > 0 else 0.0
 
 
-# ── Scoring Engine (unchanged) ─────────────────────────────────────
-
-def _score_vix(vix_price):
-    if vix_price is None: return 0, "VIX N/A"
-    if 14 <= vix_price <= 20: return 15, f"VIX {vix_price:.1f} — Normal"
-    elif 20 < vix_price <= 30: return 0, f"VIX {vix_price:.1f} — Elevated"
-    elif vix_price > 30: return -20, f"VIX {vix_price:.1f} — FEAR"
-    else: return -5, f"VIX {vix_price:.1f} — Low"
-
-def _score_vix_term(vix, vix3m):
-    if vix is None or vix3m is None: return 0, 0, "Term N/A"
-    spread = vix - vix3m
-    if spread < 0: return 10, spread, f"Contango ({spread:+.2f})"
-    else: return -15, spread, f"Backwardation ({spread:+.2f})"
-
-def _calc_adx(hist, period=14):
-    if hist is None or len(hist) < period + 1: return None
-    try:
-        h, l, c = hist["High"], hist["Low"], hist["Close"]
-        plus_dm = h.diff().where((h.diff() > l.diff().abs()) & (h.diff() > 0), 0.0)
-        minus_dm = l.diff().abs().where((l.diff().abs() > h.diff()) & (l.diff().abs() > 0), 0.0)
-        tr = pd.concat([h - l, (h - c.shift()).abs(), (l - c.shift()).abs()], axis=1).max(axis=1)
-        atr = tr.rolling(period).mean()
-        plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
-        minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
-        dx = (plus_di - minus_di).abs() / (plus_di + minus_di) * 100
-        adx = dx.rolling(period).mean().dropna()
-        return float(adx.iloc[-1]) if not adx.empty else None
-    except: return None
-
-def _calc_rsi(hist, period=14):
-    if hist is None or len(hist) < period + 1: return None
-    try:
-        delta = hist["Close"].diff()
-        gain = delta.where(delta > 0, 0.0).rolling(period).mean()
-        loss = (-delta.where(delta < 0, 0.0)).rolling(period).mean()
-        rs = gain / loss.replace(0, pd.NA)
-        rsi = 100 - (100 / (1 + rs))
-        last = rsi.dropna()
-        return float(last.iloc[-1]) if not last.empty else None
-    except: return None
-
-def _time_window(now_et):
-    h, m = now_et.hour, now_et.minute
-    t = h * 60 + m
-    windows = [
-        (570, 600, 0, "OPEN_CHAOS", "❌", "Gap chaos — avoid"),
-        (600, 630, 5, "FORMING", "⚠️", "Direction forming"),
-        (630, 690, 20, "PRIME", "🟢", "Best window"),
-        (690, 720, 8, "TRANSITION", "⚠️", "Pre-lunch transition"),
-        (720, 780, 0, "LUNCH_LULL", "❌", "Lunch lull — avoid"),
-        (780, 840, 8, "REENTRY", "⚠️", "Afternoon re-entry"),
-        (840, 885, 15, "GAMMA", "🟡", "Gamma window"),
-        (885, 960, 0, "GAMMA_BOMB", "❌", "Gamma explosion"),
-    ]
-    for start, end, score, label, emoji, desc in windows:
-        if start <= t < end:
-            nxt = None
-            if score < 15:
-                for s2, e2, sc2, lb2, em2, _ in windows:
-                    if sc2 >= 15 and s2 > t:
-                        mins = s2 - t
-                        nxt = {"window": lb2, "emoji": em2, "minutes_until": mins,
-                               "countdown": f"{mins//60}h {mins%60}m", "starts_at": f"{s2//60:02d}:{s2%60:02d}"}
-                        break
-            return {"score": score, "max": 20, "window": label, "emoji": emoji,
-                    "description": desc, "next_window": nxt, "is_blocked": score == 0 and t >= 570,
-                    "current_time": now_et.strftime("%H:%M")}
-    return {"score": 0, "max": 20, "window": "CLOSED", "emoji": "⏸️",
-            "description": "Market closed", "next_window": None, "is_blocked": False,
-            "current_time": now_et.strftime("%H:%M")}
+# ── Scoring Engine (imported) ──────────────────────────────────────
 
 def _signal_grade(score):
     if score >= 90: return {"grade": "STRONG", "label": "STRONG SIGNAL", "emoji": "🟢", "action": "Full position", "color": "#3dd68c"}
@@ -307,73 +240,33 @@ class handler(BaseHTTPRequestHandler):
                     vol_r = float(spy_h["Volume"].iloc[-1] / vol_sma.iloc[-1])
                 d_range = float(spy_h["High"].max() - spy_h["Low"].min())
 
-            # ── LAYER 2: Regime ──
-            vix_score, vix_detail = _score_vix(vix_p)
-            term_score, vix_spread, term_detail = _score_vix_term(vix_p, vix3m_p)
-            adx_val = _calc_adx(spy_h)
-            adx_score = 15 if adx_val and adx_val >= 25 else (5 if adx_val and adx_val >= 20 else 0)
-            gap_pct = ((spy_p / spy_prev) - 1) * 100 if spy_prev else 0
-            gap_score = 5 if abs(gap_pct) > 0.5 else 0
-            regime_total = vix_score + term_score + adx_score + gap_score
-            if adx_val and adx_val >= 25: regime_label = "TRENDING"
-            elif adx_val and adx_val < 20: regime_label = "CHOPPY"
-            else: regime_label = "UNKNOWN"
-            regime = {
-                "score": regime_total, "max": 40, "regime": regime_label,
-                "vix_spread": vix_spread if vix3m_p else None,
-                "details": {
-                    "vix": {"score": vix_score, "detail": vix_detail},
-                    "vix_term": {"score": term_score, "detail": term_detail},
-                    "adx": {"score": adx_score, "detail": f"ADX {adx_val:.1f}" if adx_val else "ADX N/A", "value": adx_val},
-                    "gap": {"score": gap_score, "detail": f"Gap {gap_pct:+.2f}%"},
-                }
+            # ── CALL SCORE ENGINE (Modular 140-point system) ──
+            engine_data = {
+                "spy_price": spy_p,
+                "prev_close": spy_prev,
+                "vix_price": vix_p,
+                "vix3m_price": vix3m_p,
+                "vwap": vwap,
+                "vol_ratio": vol_r,
+                "range_value": d_range,
+                "pcts": pcts_data,
+                "portfolio": load_portfolio()
             }
-
-            # ── LAYER 4: Correlation ──
-            qqq_aligned = (pcts_data.get("SPY", 0) >= 0 and pcts_data.get("QQQ", 0) >= 0) or \
-                          (pcts_data.get("SPY", 0) < 0 and pcts_data.get("QQQ", 0) < 0)
-            iwm_risk = pcts_data.get("IWM", 0)
-            sector_sync = all(v >= 0 for v in [pcts_data.get("SPY", 0), pcts_data.get("QQQ", 0), pcts_data.get("IWM", 0)]) or \
-                          all(v < 0 for v in [pcts_data.get("SPY", 0), pcts_data.get("QQQ", 0), pcts_data.get("IWM", 0)])
-            corr_score = (10 if qqq_aligned else -5) + (5 if iwm_risk > 0.3 else (-3 if iwm_risk < -0.3 else 0)) + (5 if sector_sync else 0)
-            corr_score = max(0, min(20, corr_score))
-            correlation = {"score": corr_score, "max": 20, "sector_sync": sector_sync,
-                           "details": {"qqq_alignment": {"score": 10 if qqq_aligned else -5, "detail": f"QQQ {'aligned' if qqq_aligned else 'diverged'}"},
-                                       "iwm_risk": {"score": 5 if iwm_risk > 0.3 else 0, "detail": f"IWM {iwm_risk:+.2f}%"},
-                                       "sector_sync": {"score": 5 if sector_sync else 0, "detail": "Synced" if sector_sync else "Diverged"}}}
-
-            # ── LAYER 5: Time Window ──
-            time_win = _time_window(now)
-
-            # ── LAYER 6: Technical ──
-            vwap_score = 10
-            vwap_dir = "CALL" if spy_p > vwap else "PUT"
-            vol_score = 10 if vol_r >= 2.0 else (7 if vol_r >= 1.5 else (3 if vol_r >= 1.0 else 0))
-            range_score = 10 if d_range >= 3.0 else (5 if d_range >= 2.0 else 0)
-            rsi_val = _calc_rsi(spy_h)
-            rsi_score, rsi_dir = 0, "NEUTRAL"
-            if rsi_val:
-                if rsi_val >= 60: rsi_score, rsi_dir = 10, "CALL"
-                elif rsi_val <= 40: rsi_score, rsi_dir = 10, "PUT"
-            tech_total = min(30, vwap_score + vol_score + range_score + rsi_score)
-            direction_bias = vwap_dir
-            technical = {"score": tech_total, "max": 30, "direction_bias": direction_bias, "rsi": rsi_val,
-                         "details": {
-                             "vwap_position": {"score": vwap_score, "detail": f"{'Above' if spy_p > vwap else 'Below'} VWAP by ${spy_p - vwap:+.2f}"},
-                             "volume": {"score": vol_score, "detail": f"Volume {vol_r:.2f}x"},
-                             "range": {"score": range_score, "detail": f"Range ${d_range:.2f}"},
-                             "momentum": {"score": rsi_score, "detail": f"RSI {rsi_val:.1f}" if rsi_val else "RSI N/A"}
-                         }}
-
-            # ── LAYER 7: Risk ──
-            risk = {"passed": True, "score": 0, "lockout": False, "lockout_reason": None,
-                    "strikes_remaining": 3, "trades_remaining": 3, "daily_drawdown": 0, "details": {}}
-
-            # ── TOTAL SCORE ──
-            raw_total = regime_total + corr_score + time_win["score"] + tech_total
-            active_max = 40 + 20 + 20 + 30
-            normalized = max(0, int((raw_total / active_max) * 100)) if active_max > 0 else 0
-            signal = _signal_grade(normalized)
+            
+            score_result = calculate_full_score(engine_data)
+            
+            # Extract variables for paper trading & output
+            normalized = score_result["total_score"]
+            raw_total = score_result["raw_total"]
+            active_max = score_result["max_score"]
+            direction_bias = score_result["direction"]
+            
+            # Map new 140-point grade to legacy signal dict
+            grade = score_result["grade"]
+            if grade == "STRONG": signal = {"grade": "STRONG", "label": "STRONG SIGNAL", "emoji": "🟢", "action": "Full position", "color": "#3dd68c"}
+            elif grade == "MODERATE": signal = {"grade": "MODERATE", "label": "MODERATE SIGNAL", "emoji": "🟡", "action": "Half position", "color": "#f5c451"}
+            elif grade == "WEAK": signal = {"grade": "WEAK", "label": "STANDBY", "emoji": "🟠", "action": "Monitor only", "color": "#f5a623"}
+            else: signal = {"grade": "NONE", "label": "NO SIGNAL", "emoji": "🔴", "action": "No entry", "color": "#f07178"}
 
             t_min = now.hour * 60 + now.minute
             is_regular = 570 <= t_min <= 960
@@ -401,7 +294,7 @@ class handler(BaseHTTPRequestHandler):
 
             # 2. Check for entry
             open_pos = portfolio.get("positions", {}).get(today_str)
-            if not open_pos and signal["grade"] == "STRONG" and "PRIME" in time_win["window"]:
+            if not open_pos and grade == "STRONG" and score_result["layers"].get("layer5_time_window", {}).get("score", 0) >= 20:
                 # Open Debit Spread
                 iv = vix_val / 100.0
                 opt = "call" if direction_bias == "CALL" else "put"
@@ -469,7 +362,7 @@ class handler(BaseHTTPRequestHandler):
                 "window": {"val": now.strftime("%H:%M"), "ok": is_regular},
                 "vwap": {"val": f"${spy_p - vwap:+.2f}", "ok": spy_p > vwap},
                 "vol": {"val": f"{vol_r:.2f}x", "ok": vol_r >= 1.5},
-                "sector": {"val": "SYNC" if sector_sync else "DIFF", "ok": sector_sync}
+                "sector": {"val": "SYNC" if score_result["layers"].get("layer4_correlation", {}).get("sector_sync") else "DIFF", "ok": score_result["layers"].get("layer4_correlation", {}).get("sector_sync")}
             }
 
             latency = round((time.perf_counter() - start_time) * 1000, 1)
@@ -504,14 +397,10 @@ class handler(BaseHTTPRequestHandler):
                 "last_updated": ts, "fetch_status": "SUCCESS", "latency_ms": latency,
                 "data_source": "ALPACA",
                 "session": "REGULAR" if is_regular else "CLOSED",
-                "briefing": f"{time_win['emoji']} [{time_win['window']}] Regime: {regime_label} | Bias: {direction_bias} | Score: {normalized}/100",
+                "briefing": f"{score_result['layers']['layer5_time_window']['emoji']} [{score_result['layers']['layer5_time_window']['window']}] Regime: {score_result['layers']['layer2_regime']['regime']} | Bias: {direction_bias} | Score: {normalized}/100",
                 "total_score": normalized, "max_score": active_max, "raw_score": raw_total,
                 "signal": signal, "direction_bias": direction_bias,
-                "layers": {
-                    "regime": regime,
-                    "options_flow": {"score": 0, "max": 30, "status": "NOT_IMPLEMENTED", "detail": "Coming soon"},
-                    "correlation": correlation, "time_window": time_win, "technical": technical, "risk": risk,
-                },
+                "layers": score_result["layers"],
                 "strike_recommendation": strike_rec,
                 "verdict": signal["label"], "confidence": normalized, "reason": signal["action"],
                 "rules": rules, "alert_mode": "ON SIGNAL CHANGE",
