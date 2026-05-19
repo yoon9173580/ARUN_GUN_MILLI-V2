@@ -171,7 +171,11 @@ def _calculate_strike_recommendation(spy_price, direction_bias, signal_grade,
         "max_risk_pct": max_risk_pct, "reasoning": strike_reasoning,
     }
 
-KV_URL = "https://api.restful-api.dev/objects/ff8081819d82fab6019e405b84415410"
+RESTFUL_KV_URL = os.getenv(
+    "PORTFOLIO_REST_URL",
+    "https://api.restful-api.dev/objects/ff8081819d82fab6019e405b84415410",
+)
+PORTFOLIO_STORAGE_KEY = os.getenv("PORTFOLIO_STORAGE_KEY", "arungun_portfolio")
 MAX_TRADE_HISTORY = 250
 
 def _default_pf():
@@ -188,14 +192,77 @@ def _normalize_pf(pf):
     base["recent_trades"] = base.get("recent_trades") or _build_recent_trades(base)
     return base
 
+def _storage_backend():
+    if os.getenv("KV_REST_API_URL") and os.getenv("KV_REST_API_TOKEN"):
+        return "upstash"
+    return "restful"
+
+
+def _fetch_raw_portfolio(retries=3):
+    """Load portfolio JSON from persistent storage with retries."""
+    for attempt in range(retries):
+        try:
+            if _storage_backend() == "upstash":
+                base = os.getenv("KV_REST_API_URL", "").rstrip("/")
+                token = os.getenv("KV_REST_API_TOKEN", "")
+                r = requests.get(
+                    f"{base}/get/{PORTFOLIO_STORAGE_KEY}",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=6,
+                )
+                if r.status_code == 200:
+                    raw = r.json().get("result")
+                    if raw:
+                        data = json.loads(raw) if isinstance(raw, str) else raw
+                        if isinstance(data, dict) and "cash" in data:
+                            data["_storage"] = "upstash"
+                            return data
+            else:
+                r = requests.get(RESTFUL_KV_URL, timeout=6)
+                if r.status_code == 200:
+                    data = r.json().get("data", {})
+                    if isinstance(data, dict) and "cash" in data:
+                        data["_storage"] = "restful"
+                        return data
+        except Exception:
+            pass
+        time.sleep(0.15 * (attempt + 1))
+    return None
+
+
+def _write_raw_portfolio(pf):
+    payload_pf = {k: v for k, v in pf.items() if not str(k).startswith("_")}
+    body = json.loads(json.dumps({"name": PORTFOLIO_STORAGE_KEY, "data": payload_pf}, cls=SafeEncoder))
+
+    if _storage_backend() == "upstash":
+        base = os.getenv("KV_REST_API_URL", "").rstrip("/")
+        token = os.getenv("KV_REST_API_TOKEN", "")
+        raw = json.dumps(payload_pf, cls=SafeEncoder)
+        r = requests.post(
+            f"{base}/set/{PORTFOLIO_STORAGE_KEY}",
+            data=raw,
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            timeout=10,
+        )
+        r.raise_for_status()
+        return True
+
+    r = requests.put(RESTFUL_KV_URL, json=body, timeout=10)
+    r.raise_for_status()
+    return True
+
+
 def load_portfolio():
-    try:
-        r = requests.get(KV_URL, timeout=3)
-        if r.status_code == 200:
-            data = r.json().get("data", {})
-            if "cash" in data: return _normalize_pf(data)
-    except: pass
-    return _default_pf()
+    raw = _fetch_raw_portfolio()
+    if raw:
+        pf = _normalize_pf(raw)
+        pf["_storage"] = raw.get("_storage", _storage_backend())
+        pf["_load_ok"] = True
+        return pf
+    pf = _default_pf()
+    pf["_load_ok"] = False
+    pf["_storage"] = _storage_backend()
+    return pf
 
 def _trade_recency_key(item):
     return item.get("exit_ts") or item.get("entry_ts") or item.get("logged_at") or f"{item.get('date', '')} {item.get('exit_time') or item.get('entry_time') or item.get('time', '')}"
@@ -362,19 +429,21 @@ def _entry_criteria_met(grade, direction_bias, score_result):
 
 
 def _position_invalid_reason(open_pos, grade, direction_bias, score_result):
-    """Return exit_type when the open trade no longer matches live signal; else None."""
-    if not _entry_criteria_met(grade, direction_bias, score_result):
-        layers = score_result.get("layers", {})
-        if layers.get("risk", {}).get("passed") is False or grade == "LOCKED":
-            return "RISK"
-        if grade != "STRONG":
-            return "SIGNAL"
-        if layers.get("time_window", {}).get("score", 0) < 20:
-            return "TIME_WINDOW"
-        if direction_bias not in ("CALL", "PUT"):
-            return "DIRECTION"
+    """
+    Exit rules use hysteresis — looser than entry.
+    Entry needs STRONG; exit on WEAK/NONE, direction flip, risk lock, or weak time window.
+  """
+    layers = score_result.get("layers", {})
+    if layers.get("risk", {}).get("passed") is False or grade == "LOCKED":
+        return "RISK"
+    if direction_bias not in ("CALL", "PUT"):
+        return "DIRECTION"
     if open_pos.get("direction") != direction_bias:
         return "DIRECTION"
+    if grade in ("NONE", "WEAK"):
+        return "SIGNAL"
+    if layers.get("time_window", {}).get("score", 0) < 10:
+        return "TIME_WINDOW"
     return None
 
 
@@ -407,20 +476,44 @@ def _record_position_close(portfolio, open_pos, today_str, now, spy_p, exit_val,
 
 def save_portfolio(pf):
     try:
-        remote = load_portfolio()
-        pf["history"] = _cap_list(_merge_trade_records((remote.get("history") or []) + (pf.get("history") or [])))
-        pf["trade_log"] = _cap_list(_merge_trade_events((remote.get("trade_log") or []) + (pf.get("trade_log") or [])))
+        remote = _fetch_raw_portfolio() or {}
+        remote_pf = _normalize_pf(remote) if remote else _default_pf()
+
+        merged_history = _merge_trade_records((remote_pf.get("history") or []) + (pf.get("history") or []))
+        merged_log = _merge_trade_events((remote_pf.get("trade_log") or []) + (pf.get("trade_log") or []))
+
+        # Never wipe stored trades when this request failed to load remote state.
+        if not pf.get("history") and remote_pf.get("history"):
+            pf["history"] = remote_pf["history"]
+        else:
+            pf["history"] = _cap_list(merged_history)
+        if not pf.get("trade_log") and remote_pf.get("trade_log"):
+            pf["trade_log"] = remote_pf["trade_log"]
+        else:
+            pf["trade_log"] = _cap_list(merged_log)
+
+        if remote_pf.get("initial_balance") and not pf.get("_seeded_balance"):
+            pf.setdefault("initial_balance", remote_pf["initial_balance"])
+
         pf["recent_trades"] = _build_recent_trades(pf)
         pf["current_value"] = pf["cash"]
         for p in pf.get("positions", {}).values():
             pf["current_value"] += p.get("cost", 0)
         pf["total_return_pct"] = round(((pf["current_value"] / pf["initial_balance"]) - 1) * 100, 2)
-        payload = json.loads(json.dumps({"name": "arungun_portfolio", "data": pf}, cls=SafeEncoder))
-        r = requests.put(KV_URL, json=payload, timeout=5)
-        r.raise_for_status()
+        pf["revision"] = int(remote_pf.get("revision", 0) or 0) + 1
+        pf["last_saved"] = datetime.now(NY).strftime("%Y-%m-%d %H:%M:%S")
+
+        if not pf.get("_load_ok") and not pf.get("history") and not pf.get("trade_log"):
+            pf["_save_skipped"] = "load_failed_empty_local"
+            return False
+
+        _write_raw_portfolio(pf)
+        pf["_save_ok"] = True
+        pf.pop("_save_error", None)
         return True
     except Exception as e:
         pf["_save_error"] = str(e)
+        pf["_save_ok"] = False
         return False
 
 
@@ -622,7 +715,9 @@ class handler(BaseHTTPRequestHandler):
                     portfolio["positions"][today_str] = open_pos
 
             portfolio["recent_trades"] = _build_recent_trades(portfolio)
-            save_portfolio(portfolio)
+            save_ok = save_portfolio(portfolio)
+            portfolio["persist_ok"] = save_ok
+            portfolio["trade_count"] = len(portfolio.get("history") or [])
 
             rules = {
                 "vix": {"val": f"{vix_p:.2f}", "ok": vix_p >= 14},
