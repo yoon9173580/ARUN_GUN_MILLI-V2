@@ -82,6 +82,73 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
 .pt-stats .stat-item{display:flex;flex-direction:column;gap:1px}
 .pt-stats .stat-label{font-size:0.55rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em}
 .pt-stats .stat-val{font-weight:700;font-size:0.8rem}
+
+/* ── Trade History Upgrade ── */
+.th-section{margin-top:1rem;border-top:1px solid var(--border);padding-top:1rem}
+.th-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:0.6rem;flex-wrap:wrap;gap:0.4rem}
+.th-title-row{display:flex;align-items:center;gap:8px}
+.th-title{font-size:0.7rem;color:var(--cyan);text-transform:uppercase;letter-spacing:0.12em;font-weight:700}
+.th-count{font-size:0.6rem;color:var(--muted);background:rgba(255,255,255,0.04);padding:0.1rem 0.4rem;border-radius:4px}
+.th-tabs{display:flex;gap:2px;background:rgba(255,255,255,0.03);border-radius:8px;padding:2px}
+.th-tab{font-size:0.6rem;font-weight:600;padding:0.25rem 0.6rem;border-radius:6px;cursor:pointer;color:var(--muted);transition:all 0.25s;border:none;background:transparent;font-family:'Inter',sans-serif;letter-spacing:0.03em}
+.th-tab:hover{color:var(--text);background:rgba(255,255,255,0.04)}
+.th-tab.active{color:var(--text);background:rgba(91,140,255,0.15);box-shadow:0 1px 4px rgba(0,0,0,0.2)}
+
+/* Stats Dashboard */
+.th-stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:0.5rem;margin-bottom:0.8rem}
+.th-stat-card{background:rgba(255,255,255,0.02);border:1px solid var(--border);border-radius:10px;padding:0.5rem 0.6rem;text-align:center;transition:border-color 0.3s}
+.th-stat-card:hover{border-color:var(--border2)}
+.th-stat-card .val{font-size:1rem;font-weight:800;line-height:1.2}
+.th-stat-card .lbl{font-size:0.5rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.08em;margin-top:2px}
+
+/* Equity Curve */
+.th-equity{margin-bottom:0.8rem;background:rgba(255,255,255,0.015);border:1px solid var(--border);border-radius:10px;padding:0.6rem;position:relative}
+.th-equity-label{font-size:0.5rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.1em;margin-bottom:4px}
+.th-equity canvas{width:100%;height:48px;display:block}
+
+/* Trade Cards */
+.th-list{display:flex;flex-direction:column;gap:4px;max-height:400px;overflow-y:auto;padding-right:4px;scroll-behavior:smooth}
+.th-list::-webkit-scrollbar{width:3px}
+.th-list::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.08);border-radius:3px}
+.th-card{background:rgba(255,255,255,0.02);border:1px solid transparent;border-radius:8px;padding:0.5rem 0.7rem;transition:all 0.25s;cursor:pointer;position:relative;overflow:hidden}
+.th-card::before{content:'';position:absolute;left:0;top:0;bottom:0;width:3px;border-radius:3px 0 0 3px}
+.th-card.win::before{background:var(--go)}
+.th-card.loss::before{background:var(--stop)}
+.th-card.open-trade::before{background:var(--info)}
+.th-card:hover{background:rgba(255,255,255,0.04);border-color:var(--border)}
+.th-card-main{display:flex;justify-content:space-between;align-items:center}
+.th-card-left{display:flex;align-items:center;gap:8px;min-width:0}
+.th-card-dir{font-size:0.65rem;font-weight:800;padding:0.1rem 0.35rem;border-radius:4px;letter-spacing:0.03em;flex-shrink:0}
+.th-card-dir.call{background:rgba(0,232,123,0.12);color:var(--go)}
+.th-card-dir.put{background:rgba(255,77,106,0.12);color:var(--stop)}
+.th-card-info{display:flex;flex-direction:column;min-width:0}
+.th-card-strikes{font-size:0.72rem;font-weight:700;white-space:nowrap}
+.th-card-meta{font-size:0.58rem;color:var(--muted);display:flex;gap:6px;align-items:center;white-space:nowrap}
+.th-card-right{text-align:right;flex-shrink:0;display:flex;flex-direction:column;align-items:flex-end;gap:1px}
+.th-card-pnl{font-size:0.8rem;font-weight:800}
+.th-card-pct{font-size:0.55rem;font-weight:600}
+.th-card-badge{font-size:0.5rem;font-weight:700;padding:0.08rem 0.35rem;border-radius:3px;letter-spacing:0.04em}
+.th-card-badge.exit-tp{background:rgba(0,232,123,0.1);color:var(--go)}
+.th-card-badge.exit-sl{background:rgba(255,77,106,0.1);color:var(--stop)}
+.th-card-badge.exit-eod{background:rgba(255,182,39,0.1);color:var(--warn)}
+.th-card-badge.exit-signal{background:rgba(91,140,255,0.1);color:var(--info)}
+.th-card-badge.exit-other{background:rgba(107,112,132,0.1);color:var(--muted)}
+
+/* Expandable Details */
+.th-card-details{max-height:0;overflow:hidden;transition:max-height 0.35s ease;margin-top:0}
+.th-card.expanded .th-card-details{max-height:120px;margin-top:0.5rem}
+.th-detail-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(90px,1fr));gap:0.35rem;padding-top:0.4rem;border-top:1px dashed var(--border)}
+.th-detail-item{display:flex;flex-direction:column;gap:1px}
+.th-detail-item .dlbl{font-size:0.48rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em}
+.th-detail-item .dval{font-size:0.68rem;font-weight:600}
+
+/* P&L Bar */
+.th-pnl-bar{height:2px;border-radius:1px;margin-top:4px;transition:width 0.6s ease}
+
+/* Empty State */
+.th-empty{text-align:center;padding:1.5rem 1rem;color:var(--muted)}
+.th-empty-icon{font-size:1.5rem;margin-bottom:0.4rem;opacity:0.4}
+.th-empty-text{font-size:0.72rem}
 /* Legacy Rule List */
 .rule-list{background:var(--surface);backdrop-filter:blur(20px);border:1px solid var(--border);border-radius:16px;padding:1rem;margin-bottom:1.2rem}
 .rule-item{display:flex;justify-content:space-between;padding:0.4rem 0;border-bottom:1px solid rgba(255,255,255,0.03);font-size:0.78rem}
@@ -259,8 +326,32 @@ if(sessionStorage.getItem('spy_auth')==='1') document.getElementById('authGate')
     </div>
     <div class="pt-positions mono" id="ptPositions">No active positions.</div>
     <div class="pt-stats mono" id="ptStats"></div>
-    <div class="pt-history-title" id="ptHistoryTitle">Trade History</div>
-    <div class="pt-history-list mono" id="ptHistory">No trades yet.</div>
+    <!-- Upgraded Trade History Section -->
+    <div class="th-section" id="thSection">
+      <div class="th-header">
+        <div class="th-title-row">
+          <span class="th-title">📊 Trade History</span>
+          <span class="th-count mono" id="thCount">0</span>
+        </div>
+        <div class="th-tabs" id="thTabs">
+          <button class="th-tab active" data-filter="all">All</button>
+          <button class="th-tab" data-filter="wins">Wins</button>
+          <button class="th-tab" data-filter="losses">Losses</button>
+          <button class="th-tab" data-filter="open">Open</button>
+        </div>
+      </div>
+      <div class="th-stats-grid mono" id="thStatsGrid"></div>
+      <div class="th-equity" id="thEquity" style="display:none">
+        <div class="th-equity-label">Equity Curve</div>
+        <canvas id="thEquityCanvas" height="48"></canvas>
+      </div>
+      <div class="th-list mono" id="thList">
+        <div class="th-empty">
+          <div class="th-empty-icon">📭</div>
+          <div class="th-empty-text">No trades yet.</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Legacy Compliance -->
@@ -633,54 +724,211 @@ function render(py) {
       document.getElementById('ptPositions').innerHTML = '<span style="color:var(--muted)">No active positions.</span>';
     }
 
-    // Render Trade Statistics
+    // ── UPGRADED TRADE HISTORY SECTION ──
     const allClosed = (pt.history || []).filter(h => h.status === 'CLOSED' || h.pnl_locked);
     const totalTrades = allClosed.length;
     const wins = allClosed.filter(h => h.win || (h.pnl && h.pnl > 0)).length;
+    const losses = totalTrades - wins;
     const winRate = totalTrades > 0 ? ((wins / totalTrades) * 100).toFixed(0) : 0;
     const totalPnl = allClosed.reduce((sum, h) => sum + (h.realized_pnl || h.pnl || 0), 0);
+    const avgPnl = totalTrades > 0 ? totalPnl / totalTrades : 0;
+
+    // Streak calculation
+    let currentStreak = 0, streakType = '';
+    const sortedClosed = [...allClosed].sort((a,b) => {
+      const ka = a.exit_ts || a.logged_at || `${a.date} ${a.exit_time||''}`;
+      const kb = b.exit_ts || b.logged_at || `${b.date} ${b.exit_time||''}`;
+      return ka > kb ? 1 : -1;
+    });
+    for (let i = sortedClosed.length - 1; i >= 0; i--) {
+      const w = sortedClosed[i].win || (sortedClosed[i].pnl && sortedClosed[i].pnl > 0);
+      if (i === sortedClosed.length - 1) { streakType = w ? 'W' : 'L'; currentStreak = 1; }
+      else if ((w && streakType === 'W') || (!w && streakType === 'L')) currentStreak++;
+      else break;
+    }
+
+    // Best / Worst trade
+    let bestPnl = 0, worstPnl = 0;
+    allClosed.forEach(h => {
+      const p = h.realized_pnl || h.pnl || 0;
+      if (p > bestPnl) bestPnl = p;
+      if (p < worstPnl) worstPnl = p;
+    });
+
+    // Profit Factor
+    const grossProfit = allClosed.reduce((s,h) => { const p = h.realized_pnl||h.pnl||0; return p > 0 ? s+p : s; }, 0);
+    const grossLoss = Math.abs(allClosed.reduce((s,h) => { const p = h.realized_pnl||h.pnl||0; return p < 0 ? s+p : s; }, 0));
+    const profitFactor = grossLoss > 0 ? (grossProfit / grossLoss).toFixed(2) : (grossProfit > 0 ? '∞' : '0.00');
+
+    // Legacy stats (compact)
     const statsEl = document.getElementById('ptStats');
+    statsEl.innerHTML = '';
+
+    // Trade count badge
+    document.getElementById('thCount').textContent = totalTrades;
+
+    // Stats Dashboard
+    const thStatsGrid = document.getElementById('thStatsGrid');
     if (totalTrades > 0) {
-      statsEl.innerHTML = `
-        <div class="stat-item"><span class="stat-label">Trades</span><span class="stat-val">${totalTrades}</span></div>
-        <div class="stat-item"><span class="stat-label">Win Rate</span><span class="stat-val" style="color:${winRate >= 50 ? 'var(--go)' : 'var(--stop)'}">${winRate}%</span></div>
-        <div class="stat-item"><span class="stat-label">Total P&L</span><span class="stat-val" style="color:${totalPnl >= 0 ? 'var(--go)' : 'var(--stop)'}">${totalPnl >= 0 ? '+' : ''}$${totalPnl.toFixed(2)}</span></div>
+      thStatsGrid.innerHTML = `
+        <div class="th-stat-card"><div class="val" style="color:var(--text)">${totalTrades}</div><div class="lbl">Trades</div></div>
+        <div class="th-stat-card"><div class="val" style="color:${winRate >= 50?'var(--go)':'var(--stop)'}">${winRate}%</div><div class="lbl">Win Rate</div></div>
+        <div class="th-stat-card"><div class="val" style="color:${totalPnl>=0?'var(--go)':'var(--stop)'}">${totalPnl>=0?'+':''}$${totalPnl.toFixed(0)}</div><div class="lbl">Total P&L</div></div>
+        <div class="th-stat-card"><div class="val" style="color:${avgPnl>=0?'var(--go)':'var(--stop)'}">${avgPnl>=0?'+':''}$${avgPnl.toFixed(0)}</div><div class="lbl">Avg P&L</div></div>
+        <div class="th-stat-card"><div class="val" style="color:var(--go)">+$${bestPnl.toFixed(0)}</div><div class="lbl">Best Trade</div></div>
+        <div class="th-stat-card"><div class="val" style="color:var(--stop)">${worstPnl < 0 ? '-' : ''}$${Math.abs(worstPnl).toFixed(0)}</div><div class="lbl">Worst Trade</div></div>
+        <div class="th-stat-card"><div class="val" style="color:${streakType==='W'?'var(--go)':'var(--stop)'}">${currentStreak}${streakType}</div><div class="lbl">Streak</div></div>
+        <div class="th-stat-card"><div class="val" style="color:${parseFloat(profitFactor)>=1?'var(--go)':'var(--stop)'}">${profitFactor}</div><div class="lbl">Profit Factor</div></div>
       `;
     } else {
-      statsEl.innerHTML = '';
+      thStatsGrid.innerHTML = '';
     }
 
-    // Update history title with count
-    document.getElementById('ptHistoryTitle').textContent = totalTrades > 0 ? `Trade History (${totalTrades})` : 'Trade History';
-
-    // Render History Log
-    const hist = buildRecentTrades(pt);
-    if(hist.length > 0) {
-      document.getElementById('ptHistory').innerHTML = hist.map(h => {
-        const isOpenEvent = isOpenTradeRow(h);
-        const pnlRow = tradeRowPnl(h, isOpenEvent);
-        const badge = tradeStatusBadge(h);
-        const timeLabel = isOpenEvent
-          ? (h.time || h.entry_time || '--')
-          : `${h.entry_time || h.time || '--'} \u2192 ${h.exit_time || (h.logged_at || '').split(' ')[1] || '--'}`;
-        return `<div class="pt-hist-item">
-          <span>
-            <span style="color:var(--muted);margin-right:8px">${(h.date || '').length >= 5 ? h.date.substring(5) : (h.date || '--')}</span>
-            <span style="color:${h.direction==='CALL'?'var(--go)':'var(--stop)'};font-weight:700">${h.direction}</span>
-            <span style="margin-left:4px;color:#a0a5b5">${h.K_buy}/${h.K_sell}</span>
-            <span style="margin-left:6px;color:var(--muted);font-size:0.6rem">${timeLabel}</span>
-          </span>
-          <span style="text-align:right">
-            <span style="color:var(--muted);font-size:0.6rem;margin-right:6px">[${badge}]</span>
-            <span style="color:${isOpenEvent?'var(--info)':(pnlRow.isWin?'var(--go)':'var(--stop)')};font-weight:700">${pnlRow.label}</span>
-          </span>
-        </div>`;
-      }).join('');
+    // Equity Curve
+    const equityEl = document.getElementById('thEquity');
+    if (sortedClosed.length >= 2) {
+      equityEl.style.display = 'block';
+      const canvas = document.getElementById('thEquityCanvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = canvas.offsetWidth * 2;
+      canvas.height = 96;
+      ctx.clearRect(0,0,canvas.width,canvas.height);
+      const pts = [pt.initial_balance || 2000];
+      sortedClosed.forEach(h => pts.push(pts[pts.length-1] + (h.realized_pnl||h.pnl||0)));
+      const minV = Math.min(...pts), maxV = Math.max(...pts);
+      const range = maxV - minV || 1;
+      const padY = 6;
+      const toX = i => (i / (pts.length-1)) * (canvas.width - 8) + 4;
+      const toY = v => padY + (1 - (v - minV) / range) * (canvas.height - padY*2);
+      // Gradient fill
+      const lastVal = pts[pts.length-1], firstVal = pts[0];
+      const isUp = lastVal >= firstVal;
+      const grad = ctx.createLinearGradient(0,0,0,canvas.height);
+      grad.addColorStop(0, isUp ? 'rgba(0,232,123,0.15)' : 'rgba(255,77,106,0.15)');
+      grad.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.beginPath();
+      ctx.moveTo(toX(0), canvas.height);
+      pts.forEach((v,i) => ctx.lineTo(toX(i), toY(v)));
+      ctx.lineTo(toX(pts.length-1), canvas.height);
+      ctx.closePath();
+      ctx.fillStyle = grad;
+      ctx.fill();
+      // Line
+      ctx.beginPath();
+      pts.forEach((v,i) => i===0 ? ctx.moveTo(toX(i),toY(v)) : ctx.lineTo(toX(i),toY(v)));
+      ctx.strokeStyle = isUp ? '#00e87b' : '#ff4d6a';
+      ctx.lineWidth = 2;
+      ctx.lineJoin = 'round';
+      ctx.stroke();
+      // Dot at end
+      ctx.beginPath();
+      ctx.arc(toX(pts.length-1), toY(lastVal), 3, 0, Math.PI*2);
+      ctx.fillStyle = isUp ? '#00e87b' : '#ff4d6a';
+      ctx.fill();
+      // Base line
+      const baseY = toY(firstVal);
+      ctx.setLineDash([4,4]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(0,baseY); ctx.lineTo(canvas.width,baseY); ctx.stroke();
+      ctx.setLineDash([]);
     } else {
-      document.getElementById('ptHistory').innerHTML = '<span style="color:var(--muted)">No trades yet.</span>';
+      equityEl.style.display = 'none';
     }
+
+    // Build trade list
+    const hist = buildRecentTrades(pt);
+    const thList = document.getElementById('thList');
+
+    // Find max absolute P&L for bar scaling
+    const maxAbsPnl = Math.max(1, ...hist.map(h => Math.abs(h.realized_pnl||h.pnl||h.cost||0)));
+
+    // Store for filtering
+    window._tradeHistData = hist;
+    window._maxAbsPnl = maxAbsPnl;
+    renderTradeList(hist, maxAbsPnl, 'all');
   }
 }
+
+function getExitBadgeClass(exitType) {
+  if (!exitType) return 'exit-other';
+  const t = exitType.toUpperCase();
+  if (t === 'TP') return 'exit-tp';
+  if (t === 'SL') return 'exit-sl';
+  if (t === 'EOD' || t === 'STALE_EOD') return 'exit-eod';
+  if (['SIGNAL','RISK','DIRECTION','TIME_WINDOW'].includes(t)) return 'exit-signal';
+  return 'exit-other';
+}
+
+function renderTradeList(hist, maxAbsPnl, filter) {
+  const thList = document.getElementById('thList');
+  let filtered = hist;
+  if (filter === 'wins') filtered = hist.filter(h => !isOpenTradeRow(h) && (h.win || (h.pnl && h.pnl > 0)));
+  else if (filter === 'losses') filtered = hist.filter(h => !isOpenTradeRow(h) && (h.pnl != null && h.pnl <= 0));
+  else if (filter === 'open') filtered = hist.filter(h => isOpenTradeRow(h));
+
+  if (filtered.length === 0) {
+    thList.innerHTML = `<div class="th-empty"><div class="th-empty-icon">${filter==='wins'?'🏆':filter==='losses'?'📉':filter==='open'?'⏳':'📭'}</div><div class="th-empty-text">${filter==='all'?'No trades yet.':filter==='wins'?'No winning trades yet.':filter==='losses'?'No losing trades yet.':'No open positions.'}</div></div>`;
+    return;
+  }
+
+  thList.innerHTML = filtered.map((h, idx) => {
+    const isOpen = isOpenTradeRow(h);
+    const pnlRow = tradeRowPnl(h, isOpen);
+    const pnl = isOpen ? 0 : (h.realized_pnl ?? h.pnl ?? 0);
+    const pnlPct = h.pnl_pct || 0;
+    const isWin = pnl > 0;
+    const cardClass = isOpen ? 'open-trade' : (isWin ? 'win' : 'loss');
+    const dirClass = (h.direction||'').toLowerCase();
+    const dateStr = (h.date||'').length >= 5 ? h.date.substring(5) : (h.date || '--');
+    const entryTime = h.entry_time || h.time || '--';
+    const exitTime = h.exit_time || '--';
+    const badge = tradeStatusBadge(h);
+    const exitBadgeClass = getExitBadgeClass(h.exit_type);
+    const barWidth = maxAbsPnl > 0 ? Math.min(100, (Math.abs(pnl) / maxAbsPnl) * 100) : 0;
+    const contracts = h.contracts || 1;
+
+    return `<div class="th-card ${cardClass}" onclick="this.classList.toggle('expanded')">
+      <div class="th-card-main">
+        <div class="th-card-left">
+          <span class="th-card-dir ${dirClass}">${h.direction||'--'}</span>
+          <div class="th-card-info">
+            <span class="th-card-strikes">${h.K_buy||'--'}/${h.K_sell||'--'} <span style="color:var(--muted);font-weight:400;font-size:0.6rem">x${contracts}</span></span>
+            <span class="th-card-meta">
+              <span>${dateStr}</span>
+              <span>${isOpen ? entryTime : entryTime + ' → ' + exitTime}</span>
+              <span class="th-card-badge ${exitBadgeClass}">${badge}</span>
+            </span>
+          </div>
+        </div>
+        <div class="th-card-right">
+          <span class="th-card-pnl" style="color:${isOpen?'var(--info)':(isWin?'var(--go)':'var(--stop)')}">${pnlRow.label}</span>
+          ${!isOpen && pnlPct ? `<span class="th-card-pct" style="color:${isWin?'var(--go)':'var(--stop)'}">${pnlPct>=0?'+':''}${pnlPct.toFixed(1)}%</span>` : ''}
+        </div>
+      </div>
+      ${!isOpen ? `<div style="background:rgba(255,255,255,0.03);border-radius:1px;height:2px;margin-top:5px;overflow:hidden"><div style="height:100%;width:${barWidth}%;background:${isWin?'var(--go)':'var(--stop)'};border-radius:1px;transition:width 0.6s"></div></div>` : ''}
+      <div class="th-card-details">
+        <div class="th-detail-grid">
+          <div class="th-detail-item"><span class="dlbl">Entry SPY</span><span class="dval">$${(h.entry_spy||0).toFixed?.(2) ?? '--'}</span></div>
+          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Exit SPY</span><span class="dval">$${(h.exit_spy||0).toFixed?.(2) ?? '--'}</span></div>` : ''}
+          <div class="th-detail-item"><span class="dlbl">Net Debit</span><span class="dval">$${(h.net_debit||0).toFixed?.(2) ?? '--'}</span></div>
+          <div class="th-detail-item"><span class="dlbl">Cost</span><span class="dval">$${(h.cost||0).toFixed?.(0) ?? '--'}</span></div>
+          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Revenue</span><span class="dval" style="color:${(h.revenue||0)>=(h.cost||0)?'var(--go)':'var(--stop)'}">$${(h.revenue||0).toFixed?.(0) ?? '--'}</span></div>` : ''}
+          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Exit Value</span><span class="dval">$${(h.exit_val||0).toFixed?.(2) ?? '--'}</span></div>` : ''}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// Tab click handler
+document.getElementById('thTabs').addEventListener('click', e => {
+  if (!e.target.classList.contains('th-tab')) return;
+  document.querySelectorAll('.th-tab').forEach(t => t.classList.remove('active'));
+  e.target.classList.add('active');
+  const filter = e.target.dataset.filter;
+  if (window._tradeHistData) renderTradeList(window._tradeHistData, window._maxAbsPnl, filter);
+});
 
 async function loadData() {
   const t0 = performance.now();
