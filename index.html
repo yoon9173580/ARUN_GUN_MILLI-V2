@@ -200,6 +200,17 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
 .strike-metric-label{font-size:0.58rem;color:var(--muted);text-transform:uppercase;letter-spacing:0.06em}
 .strike-metric-value{font-size:1rem;font-weight:700}
 .strike-reasoning{font-size:0.72rem;color:var(--muted);padding:0.5rem 0.7rem;background:rgba(255,255,255,0.02);border-radius:8px;border-left:2px solid var(--purple);display:flex;align-items:center;gap:6px}
+.pdt-bar{display:flex;align-items:center;gap:8px;padding:0.45rem 0.7rem;margin:0.5rem 0;border-radius:10px;font-size:0.72rem;font-family:'JetBrains Mono',monospace}
+.pdt-bar.ok{background:rgba(61,214,140,0.08);border:1px solid rgba(61,214,140,0.18)}
+.pdt-bar.warn{background:rgba(245,196,81,0.08);border:1px solid rgba(245,196,81,0.18)}
+.pdt-bar.blocked{background:rgba(240,113,120,0.10);border:1px solid rgba(240,113,120,0.22)}
+.pdt-dots{display:flex;gap:4px}
+.pdt-dot{width:8px;height:8px;border-radius:50%;background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);transition:all 0.3s}
+.pdt-dot.used{background:var(--stop);border-color:var(--stop);box-shadow:0 0 6px rgba(240,113,120,0.4)}
+.pdt-dot.avail{background:var(--go);border-color:var(--go);box-shadow:0 0 6px rgba(61,214,140,0.4)}
+.pdt-label{color:var(--muted);font-size:0.65rem;text-transform:uppercase;letter-spacing:0.05em}
+.pdt-value{font-weight:700;font-size:0.78rem}
+.pdt-window{color:var(--muted);font-size:0.6rem;margin-left:auto}
 </style>
 </head>
 <body>
@@ -323,6 +334,12 @@ if(sessionStorage.getItem('spy_auth')==='1') document.getElementById('authGate')
       <div class="pt-stat"><span class="pt-label">Account Value</span><span class="pt-value mono" id="ptValue">--</span></div>
       <div class="pt-stat"><span class="pt-label">Strategy</span><span class="pt-value" style="color:var(--cyan);font-size:0.9rem">Debit Spread v3</span></div>
       <div class="pt-stat"><span class="pt-label">Cash</span><span class="pt-value mono" id="ptCash">--</span></div>
+    </div>
+    <div class="pdt-bar ok" id="pdtBar" style="display:none">
+      <span class="pdt-label">PDT</span>
+      <span class="pdt-dots" id="pdtDots"></span>
+      <span class="pdt-value" id="pdtValue">3/3</span>
+      <span class="pdt-window" id="pdtWindow"></span>
     </div>
     <div class="pt-positions mono" id="ptPositions">No active positions.</div>
     <div class="pt-stats mono" id="ptStats"></div>
@@ -709,6 +726,26 @@ function render(py) {
       }
     }
     
+    // PDT Status
+    if (pt.pdt) {
+      const pdt = pt.pdt;
+      const pdtBar = document.getElementById('pdtBar');
+      pdtBar.style.display = 'flex';
+      const rem = pdt.day_trades_remaining;
+      const used = pdt.day_trades_used;
+      pdtBar.className = 'pdt-bar ' + (pdt.blocked ? 'blocked' : (rem <= 1 ? 'warn' : 'ok'));
+      // Render dots (3 total)
+      let dots = '';
+      for (let i = 0; i < 3; i++) {
+        dots += `<span class="pdt-dot ${i < used ? 'used' : 'avail'}"></span>`;
+      }
+      document.getElementById('pdtDots').innerHTML = dots;
+      document.getElementById('pdtValue').textContent = pdt.blocked ? 'BLOCKED' : `${rem}/3 left`;
+      document.getElementById('pdtValue').style.color = pdt.blocked ? 'var(--stop)' : (rem <= 1 ? 'var(--warn, #f5c451)' : 'var(--go)');
+      document.getElementById('pdtWindow').textContent = pdt.window_days || '';
+      if (!pdt.subject) pdtBar.style.display = 'none';
+    }
+
     // Render Active Positions
     const pos = Object.values(pt.positions || {});
     if(pos.length > 0) {

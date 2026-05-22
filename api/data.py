@@ -17,6 +17,9 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from engines.score_engine import run_score_engine
 STARTING_BALANCE = 500.0
+PDT_THRESHOLD = 2000.0      # accounts below this are subject to PDT
+PDT_MAX_DAY_TRADES = 3      # max day trades per rolling 5 business days
+PDT_WINDOW_DAYS = 5         # rolling business-day window
 
 def norm_cdf(x):
     return (1.0 + math.erf(x / math.sqrt(2.0))) / 2.0
@@ -690,7 +693,58 @@ def _close_trade(pos, now, spy_p, exit_val, exit_type):
     return pos
 
 
-def _entry_criteria_met(grade, direction_bias, score_result):
+def _count_day_trades(portfolio, now):
+    """Count day trades in the rolling 5-business-day window.
+    A day trade = open and close on the same calendar day."""
+    history = portfolio.get("history") or []
+    # Build list of the last N business days (exclude weekends)
+    biz_days = []
+    d = now.date() if hasattr(now, 'date') else now
+    while len(biz_days) < PDT_WINDOW_DAYS:
+        if d.weekday() < 5:  # Mon-Fri
+            biz_days.append(d.strftime("%Y-%m-%d"))
+        d -= timedelta(days=1)
+    count = 0
+    for h in history:
+        if not isinstance(h, dict):
+            continue
+        trade_date = h.get("date", "")
+        if trade_date not in biz_days:
+            continue
+        # A day trade: opened and closed on the same day
+        if h.get("status") == "CLOSED" or h.get("pnl_locked"):
+            count += 1
+    return count, biz_days
+
+
+def _pdt_status(portfolio, now):
+    """Return PDT enforcement info dict."""
+    account_value = portfolio.get("cash", 0) + sum(
+        float(p.get("cost", 0)) for p in (portfolio.get("positions") or {}).values()
+    )
+    subject = account_value < PDT_THRESHOLD
+    used, window = _count_day_trades(portfolio, now)
+    remaining = max(0, PDT_MAX_DAY_TRADES - used) if subject else 999
+    blocked = subject and used >= PDT_MAX_DAY_TRADES
+    return {
+        "subject": subject,
+        "threshold": PDT_THRESHOLD,
+        "account_value": round(account_value, 2),
+        "day_trades_used": used,
+        "day_trades_remaining": remaining,
+        "blocked": blocked,
+        "window_days": biz_days_label(window),
+    }
+
+
+def biz_days_label(days):
+    """Return first and last date of the window for display."""
+    if not days:
+        return ""
+    return f"{days[-1]} ~ {days[0]}"
+
+
+def _entry_criteria_met(grade, direction_bias, score_result, portfolio=None, now=None):
     """Same rules used to open a debit spread."""
     layers = score_result.get("layers", {})
     if layers.get("risk", {}).get("passed") is False or grade == "LOCKED":
@@ -701,6 +755,11 @@ def _entry_criteria_met(grade, direction_bias, score_result):
         return False
     if direction_bias not in ("CALL", "PUT"):
         return False
+    # ── PDT Rule ──
+    if portfolio and now:
+        pdt = _pdt_status(portfolio, now)
+        if pdt["blocked"]:
+            return False
     return True
 
 
@@ -936,30 +995,50 @@ class handler(BaseHTTPRequestHandler):
 
             # 2. Check for entry (only while entry criteria hold)
             open_pos = portfolio.get("positions", {}).get(today_str)
-            if not open_pos and is_regular and _entry_criteria_met(grade, direction_bias, score_result):
-                # Open Debit Spread
+            if not open_pos and is_regular and _entry_criteria_met(grade, direction_bias, score_result, portfolio, now):
+                # Open Debit Spread — dynamic width & sizing by account tier
                 iv = vix_val / 100.0
                 opt = "call" if direction_bias == "CALL" else "put"
+                cash = portfolio["cash"]
+
+                # Spread width scales with account size
+                if cash < 1000:
+                    spread_w = 2      # $500-tier: narrow $2-wide spreads
+                elif cash < 5000:
+                    spread_w = 3      # $1k-tier: $3-wide spreads
+                else:
+                    spread_w = 5      # $5k+: full $5-wide spreads
+
                 K_buy = round(spy_p)
-                K_sell = K_buy + 5 if opt == "call" else K_buy - 5
-                
+                K_sell = K_buy + spread_w if opt == "call" else K_buy - spread_w
+
                 T_entry = 5.5 / (252 * 6.5)
                 lp = bs_price(spy_p, K_buy, T_entry, 0.05, iv, opt)
                 sp = bs_price(spy_p, K_sell, T_entry, 0.05, iv, opt)
                 net_debit = (lp - sp) * 1.03 + 0.04
-                
+
                 if net_debit > 0.05:
-                    risk_pct = 0.10 if normalized >= 95 else (0.08 if vix_val >= 25 else (0.06 if vix_val >= 20 else 0.05))
-                    max_risk = portfolio["cash"] * risk_pct
-                    contracts = max(1, int(max_risk / (net_debit * 100)))
-                    
-                    if contracts > 0:
-                        cost = round(net_debit * 100 * contracts, 2)
+                    # Risk % scales with account tier & signal strength
+                    if cash < 1000:
+                        risk_pct = 0.20 if normalized >= 95 else (0.18 if vix_val >= 25 else (0.15 if vix_val >= 20 else 0.12))
+                    elif cash < 5000:
+                        risk_pct = 0.15 if normalized >= 95 else (0.12 if vix_val >= 25 else (0.10 if vix_val >= 20 else 0.08))
+                    else:
+                        risk_pct = 0.10 if normalized >= 95 else (0.08 if vix_val >= 25 else (0.06 if vix_val >= 20 else 0.05))
+
+                    max_risk = cash * risk_pct
+                    max_position = cash * 0.35          # never >35% of cash in one trade
+                    cost_per_contract = net_debit * 100
+                    contracts = int(min(max_risk, max_position) / cost_per_contract)
+
+                    if contracts > 0 and cost_per_contract * contracts <= cash:
+                        cost = round(cost_per_contract * contracts, 2)
                         trade_id = f"{today_str}-{now.strftime('%H%M%S')}-{direction_bias}"
                         new_pos = _ensure_trade_id({
                             "trade_id": trade_id, "date": today_str, "status": "OPEN", "action": "BUY",
                             "score": normalized, "grade": signal["grade"],
                             "direction": direction_bias, "K_buy": K_buy, "K_sell": K_sell,
+                            "spread_width": spread_w,
                             "net_debit": round(net_debit, 2), "contracts": contracts, "cost": cost,
                             "entry_spy": round(spy_p, 2), "entry_time": now.strftime("%H:%M"),
                             "entry_ts": now.strftime("%Y-%m-%d %H:%M:%S"), "time": now.strftime("%H:%M"),
@@ -977,6 +1056,7 @@ class handler(BaseHTTPRequestHandler):
                             "score": normalized,
                             "K_buy": K_buy,
                             "K_sell": K_sell,
+                            "spread_width": spread_w,
                             "contracts": contracts,
                             "entry_spy": round(spy_p, 2),
                             "net_debit": round(net_debit, 2),
@@ -1023,6 +1103,7 @@ class handler(BaseHTTPRequestHandler):
                     portfolio["positions"][today_str] = open_pos
 
             portfolio["recent_trades"] = _build_recent_trades(portfolio)
+            portfolio["pdt"] = _pdt_status(portfolio, now)
             save_ok = save_portfolio(portfolio)
             portfolio["persist_ok"] = save_ok
             portfolio["storage_type"] = portfolio.get("_storage", "unknown")
