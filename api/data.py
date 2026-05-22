@@ -1030,6 +1030,8 @@ class handler(BaseHTTPRequestHandler):
                     max_position = cash * 0.35          # never >35% of cash in one trade
                     cost_per_contract = net_debit * 100
                     contracts = int(min(max_risk, max_position) / cost_per_contract)
+                    if contracts == 0 and cost_per_contract <= cash:
+                        contracts = 1
 
                     if contracts > 0 and cost_per_contract * contracts <= cash:
                         cost = round(cost_per_contract * contracts, 2)
