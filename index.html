@@ -247,6 +247,148 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
 .lr-summary.not-ready{background:rgba(91,140,255,0.06);color:var(--info);border:1px solid rgba(91,140,255,0.12)}
 .lr-summary.almost{background:rgba(245,196,81,0.06);color:var(--warn);border:1px solid rgba(245,196,81,0.12)}
 .lr-summary.go-live{background:rgba(0,232,123,0.08);color:var(--go);border:1px solid rgba(0,232,123,0.18)}
+
+/* ── Option Chain Box ── */
+.option-chain-box {
+  background: linear-gradient(145deg, rgba(14, 16, 28, 0.95), rgba(8, 10, 16, 0.98));
+  backdrop-filter: blur(24px);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 1.3rem;
+  margin-bottom: 1.2rem;
+  position: relative;
+  overflow: hidden;
+  transition: border-color 0.3s;
+}
+.option-chain-box::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--border2), transparent);
+}
+.oc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+  padding-bottom: 0.6rem;
+  border-bottom: 1px solid var(--border);
+}
+.oc-title {
+  font-size: 0.7rem;
+  color: var(--cyan);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.oc-badge {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.58rem;
+  font-weight: 700;
+  padding: 0.15rem 0.5rem;
+  border-radius: 6px;
+  letter-spacing: 0.05em;
+}
+.oc-badge.live {
+  background: rgba(0, 232, 123, 0.12);
+  color: var(--go);
+  border: 1px solid rgba(0, 232, 123, 0.2);
+  box-shadow: 0 0 8px rgba(0, 232, 123, 0.1);
+}
+.oc-badge.est {
+  background: rgba(255, 182, 39, 0.1);
+  color: var(--warn);
+  border: 1px solid rgba(255, 182, 39, 0.18);
+}
+.oc-table-container {
+  overflow-x: auto;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.15);
+  border: 1px solid rgba(255, 255, 255, 0.02);
+}
+.oc-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+  text-align: center;
+}
+.oc-table th {
+  padding: 0.5rem 0.4rem;
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--muted);
+  font-weight: 600;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+}
+.oc-table td {
+  padding: 0.45rem 0.4rem;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+}
+.oc-table tr:last-child td {
+  border-bottom: none;
+}
+.oc-table tr.recommended-row {
+  background: rgba(0, 232, 252, 0.06);
+  position: relative;
+}
+.oc-table tr.recommended-row td {
+  border-top: 1px solid rgba(0, 232, 252, 0.2);
+  border-bottom: 1px solid rgba(0, 232, 252, 0.2);
+}
+.oc-strike-val {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 800;
+  color: var(--cyan);
+  font-size: 0.82rem;
+}
+.oc-strike-val.rec {
+  color: #fff;
+  text-shadow: 0 0 8px rgba(0, 232, 252, 0.8);
+}
+.oc-price-cell {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+}
+.oc-price-cell.rec-call {
+  color: var(--go);
+}
+.oc-price-cell.rec-put {
+  color: var(--stop);
+}
+.oc-tag {
+  font-size: 0.52rem;
+  padding: 0.08rem 0.3rem;
+  border-radius: 3px;
+  font-weight: 700;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+.oc-tag.call {
+  background: rgba(0, 232, 123, 0.15);
+  color: var(--go);
+}
+.oc-tag.put {
+  background: rgba(255, 77, 106, 0.15);
+  color: var(--stop);
+}
+@keyframes cell-flash-green {
+  0% { background: rgba(0, 232, 123, 0.25); color: #fff; }
+  100% { background: transparent; }
+}
+@keyframes cell-flash-red {
+  0% { background: rgba(255, 77, 106, 0.25); color: #fff; }
+  100% { background: transparent; }
+}
+.flash-up { animation: cell-flash-green 0.7s ease-out; }
+.flash-down { animation: cell-flash-red 0.7s ease-out; }
 </style>
 </head>
 <body>
@@ -358,6 +500,28 @@ if(sessionStorage.getItem('spy_auth')==='1') document.getElementById('authGate')
     <div class="strike-table" id="strikeTable"></div>
     <div class="strike-metrics" id="strikeMetrics"></div>
     <div class="strike-reasoning" id="strikeReasoning">--</div>
+  </div>
+
+  <!-- Option Chain Widget -->
+  <div class="option-chain-box" id="optionChainWidget" style="display:none">
+    <div class="oc-header">
+      <div class="oc-title">📊 SPY 0DTE Option Chain</div>
+      <div class="oc-badge" id="ocBadge">BS ESTIMATED</div>
+    </div>
+    <div class="oc-table-container">
+      <table class="oc-table">
+        <thead>
+          <tr>
+            <th>CALL (Bid / Ask)</th>
+            <th>Strike</th>
+            <th>PUT (Bid / Ask)</th>
+          </tr>
+        </thead>
+        <tbody id="ocBody">
+          <!-- Dynamically populated rows -->
+        </tbody>
+      </table>
+    </div>
   </div>
 
   <!-- Paper Trading -->
@@ -731,6 +895,96 @@ function render(py) {
     document.getElementById('strikeReasoning').innerHTML = `💡 ${sr.reasoning}`;
   } else {
     srWidget.style.display = 'none';
+  }
+
+  // Option Chain Table Rendering
+  const ocWidget = document.getElementById('optionChainWidget');
+  if (sr && sr.option_chain && sr.option_chain.length > 0) {
+    ocWidget.style.display = 'block';
+    
+    // 1. Update source badge
+    const ocBadge = document.getElementById('ocBadge');
+    const isLive = sr.option_chain.some(o => o.call.source === 'LIVE' || o.put.source === 'LIVE');
+    if (isLive) {
+      ocBadge.textContent = '● LIVE ALPACA';
+      ocBadge.className = 'oc-badge live';
+    } else {
+      ocBadge.textContent = '● BS THEORETICAL';
+      ocBadge.className = 'oc-badge est';
+    }
+    
+    // 2. Populate rows
+    const ocBody = document.getElementById('ocBody');
+    
+    if (!window.lastOptionQuotes) {
+      window.lastOptionQuotes = {};
+    }
+    
+    ocBody.innerHTML = sr.option_chain.map(o => {
+      const isRec = o.is_recommended;
+      const recClass = isRec ? 'recommended-row' : '';
+      const recStrikeClass = isRec ? 'rec' : '';
+      
+      // CALL prices
+      const c_bid = o.call.bid;
+      const c_ask = o.call.ask;
+      const c_key_bid = `C_${o.strike}_B`;
+      const c_key_ask = `C_${o.strike}_A`;
+      
+      let c_anim_bid = '', c_anim_ask = '';
+      if (window.lastOptionQuotes[c_key_bid] !== undefined) {
+        if (c_bid > window.lastOptionQuotes[c_key_bid]) c_anim_bid = 'flash-up';
+        else if (c_bid < window.lastOptionQuotes[c_key_bid]) c_anim_bid = 'flash-down';
+      }
+      if (window.lastOptionQuotes[c_key_ask] !== undefined) {
+        if (c_ask > window.lastOptionQuotes[c_key_ask]) c_anim_ask = 'flash-up';
+        else if (c_ask < window.lastOptionQuotes[c_key_ask]) c_anim_ask = 'flash-down';
+      }
+      window.lastOptionQuotes[c_key_bid] = c_bid;
+      window.lastOptionQuotes[c_key_ask] = c_ask;
+      
+      // PUT prices
+      const p_bid = o.put.bid;
+      const p_ask = o.put.ask;
+      const p_key_bid = `P_${o.strike}_B`;
+      const p_key_ask = `P_${o.strike}_A`;
+      
+      let p_anim_bid = '', p_anim_ask = '';
+      if (window.lastOptionQuotes[p_key_bid] !== undefined) {
+        if (p_bid > window.lastOptionQuotes[p_key_bid]) p_anim_bid = 'flash-up';
+        else if (p_bid < window.lastOptionQuotes[p_key_bid]) p_anim_bid = 'flash-down';
+      }
+      if (window.lastOptionQuotes[p_key_ask] !== undefined) {
+        if (p_ask > window.lastOptionQuotes[p_key_ask]) p_anim_ask = 'flash-up';
+        else if (p_ask < window.lastOptionQuotes[p_key_ask]) p_anim_ask = 'flash-down';
+      }
+      window.lastOptionQuotes[p_key_bid] = p_bid;
+      window.lastOptionQuotes[p_key_ask] = p_ask;
+      
+      const callRecTag = (isRec && sr.direction === 'CALL') ? '<span class="oc-tag call">REC</span>' : '';
+      const putRecTag = (isRec && sr.direction === 'PUT') ? '<span class="oc-tag put">REC</span>' : '';
+      
+      const recCallClass = (isRec && sr.direction === 'CALL') ? 'rec-call' : '';
+      const recPutClass = (isRec && sr.direction === 'PUT') ? 'rec-put' : '';
+      
+      return `<tr class="${recClass}">
+        <td class="oc-price-cell ${recCallClass}">
+          <span class="${c_anim_bid}">$${c_bid.toFixed(2)}</span>
+          <span> / </span>
+          <span class="${c_anim_ask}">$${c_ask.toFixed(2)}</span>
+          ${callRecTag}
+        </td>
+        <td class="oc-strike-val ${recStrikeClass}">$${o.strike}</td>
+        <td class="oc-price-cell ${recPutClass}">
+          <span class="${p_anim_bid}">$${p_bid.toFixed(2)}</span>
+          <span> / </span>
+          <span class="${p_anim_ask}">$${p_ask.toFixed(2)}</span>
+          ${putRecTag}
+        </td>
+      </tr>`;
+    }).join('');
+  } else {
+    ocWidget.style.display = 'none';
   }
 
   // Legacy Rules

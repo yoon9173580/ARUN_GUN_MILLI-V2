@@ -195,15 +195,126 @@ def _pct(price, prev):
 
 # ── Scoring Engine (imported) ──────────────────────────────────────
 
+def _get_0dte_option_chain(spy_price, vix_price):
+    """
+    Fetch 0DTE SPY Option Chain from Alpaca Option Market Data API.
+    Returns:
+      dict: A map of {strike: {"call": contract_snapshot, "put": contract_snapshot}}
+      or None if API fails or lacks permission.
+    """
+    if not spy_price:
+        return None
+    api_key = ALPACA_HEADERS.get("APCA-API-KEY-ID", "")
+    api_secret = ALPACA_HEADERS.get("APCA-API-SECRET-KEY", "")
+    if not api_key or not api_secret:
+        return None
+
+    # 1. Get today's date in NY Time
+    now_ny = datetime.now(NY)
+    today_str = now_ny.strftime("%Y-%m-%d")
+
+    try:
+        # 2. Get active SPY contracts for today or closest next date
+        contracts_url = f"{ALPACA_DATA_URL}/v2/options/contracts"
+        params = {
+            "underlying_symbol": "SPY",
+            "status": "active",
+            "expiration_date_gte": today_str,
+            "limit": 100
+        }
+        r = requests.get(contracts_url, headers=ALPACA_HEADERS, params=params, timeout=5)
+        if r.status_code != 200:
+            return None
+
+        contracts_data = r.json().get("option_contracts", [])
+        if not contracts_data:
+            return None
+
+        # Sort and find the closest expiration date
+        expirations = sorted(list(set(c["expiration_date"] for c in contracts_data)))
+        target_exp = expirations[0] if expirations else today_str
+
+        # 3. Filter contracts by closest expiration and strikes around spy_price (+/- 4 strikes)
+        strike_center = int(round(spy_price))
+        strikes_to_fetch = set(range(strike_center - 4, strike_center + 5))
+
+        filtered_contracts = []
+        for c in contracts_data:
+            if c.get("expiration_date") == target_exp:
+                try:
+                    strike = int(float(c["strike_price"]))
+                    if strike in strikes_to_fetch:
+                        filtered_contracts.append(c)
+                except (ValueError, TypeError):
+                    continue
+
+        if not filtered_contracts:
+            return None
+
+        # 4. Get snapshots for filtered contracts
+        symbols = [c["symbol"] for c in filtered_contracts]
+        symbols_str = ",".join(symbols)
+
+        snapshots_url = f"{ALPACA_DATA_URL}/v2/options/snapshots"
+        snap_params = {"symbols": symbols_str}
+        snap_r = requests.get(snapshots_url, headers=ALPACA_HEADERS, params=snap_params, timeout=5)
+        if snap_r.status_code != 200:
+            return None
+
+        snapshots = snap_r.json().get("snapshots", {})
+        if not snapshots:
+            return None
+
+        # 5. Build structured chain map
+        chain_map = {}
+        for strike in strikes_to_fetch:
+            chain_map[strike] = {"call": None, "put": None}
+
+        for c in filtered_contracts:
+            sym = c["symbol"]
+            strike = int(float(c["strike_price"]))
+            opt_type = c["type"].lower()  # "call" or "put"
+
+            if strike not in chain_map:
+                continue
+
+            snap = snapshots.get(sym, {})
+            quote = snap.get("latestQuote", {})
+            trade = snap.get("latestTrade", {})
+
+            bid = quote.get("bp")
+            ask = quote.get("ap")
+            last = trade.get("p")
+
+            chain_map[strike][opt_type] = {
+                "symbol": sym,
+                "bid": float(bid) if bid is not None else None,
+                "ask": float(ask) if ask is not None else None,
+                "last": float(last) if last is not None else None,
+                "bid_size": quote.get("bs"),
+                "ask_size": quote.get("as"),
+            }
+
+        return chain_map
+
+    except Exception as e:
+        print(f"Error fetching Alpaca option chain: {e}")
+        return None
+
+
 def _calculate_strike_recommendation(spy_price, direction_bias, signal_grade,
                                       vix_price, vwap, normalized_score,
                                       portfolio_cash, now_et):
     if spy_price is None or direction_bias == "NEUTRAL" or signal_grade in ("NONE",):
-        return {"active": False, "reason": "No actionable signal"}
-    atm_strike = round(spy_price)
+        # We still want to return a default Option Chain even if no active recommendation,
+        # so users can see the Option Chain live on the dashboard anytime.
+        pass
+
+    atm_strike = round(spy_price) if spy_price is not None else 500
     if signal_grade == "STRONG": otm_offset, strike_reasoning = 0, "ATM — high conviction"
     elif signal_grade == "MODERATE": otm_offset, strike_reasoning = 1, "OTM-1 — balanced cost/probability"
     else: otm_offset, strike_reasoning = 2, "OTM-2 — monitor zone"
+
     if direction_bias == "CALL":
         recommended_strike = atm_strike + otm_offset
         otm_1, otm_2 = atm_strike + 1, atm_strike + 2
@@ -212,50 +323,116 @@ def _calculate_strike_recommendation(spy_price, direction_bias, signal_grade,
         recommended_strike = atm_strike - otm_offset
         otm_1, otm_2 = atm_strike - 1, atm_strike - 2
         contract_type, type_label = "P", "PUT"
+
     contract_label = f"SPY ${recommended_strike}{contract_type} 0DTE"
-    # BS estimate from VIX (no external options chain fetch)
+
+    # 1. Try fetching real option chain
     vix_val = vix_price if vix_price else 18.0
     iv = vix_val / 100.0
     T = max(1.0 / (252.0 * 6.5), 1e-4)
-    opt = "call" if contract_type == "C" else "put"
-    atm_est = bs_price(spy_price, recommended_strike, T, 0.05, iv, opt)
-    otm_discount = max(0.35, 1.0 - (otm_offset * 0.2))
-    mid_premium = max(round(atm_est * otm_discount, 2), 0.05)
-    est_premium_low = max(round(mid_premium * 0.85, 2), 0.01)
-    est_premium_high = max(round(mid_premium * 1.15, 2), 0.10)
+
+    chain_data = _get_0dte_option_chain(spy_price, vix_price)
+    
+    # 2. Extract values for recommended strike
+    real_bid, real_ask, real_last = None, None, None
+    data_source = "BS_ESTIMATE"
+    mid_premium = 0.0
+
+    if chain_data and recommended_strike in chain_data:
+        opt_key = "call" if contract_type == "C" else "put"
+        opt_snap = chain_data[recommended_strike][opt_key]
+        if opt_snap and opt_snap.get("bid") is not None and opt_snap.get("ask") is not None:
+            real_bid = opt_snap["bid"]
+            real_ask = opt_snap["ask"]
+            real_last = opt_snap["last"]
+            mid_premium = max(round((real_bid + real_ask) / 2.0, 2), 0.01)
+            data_source = "LIVE"
+
+    if data_source == "BS_ESTIMATE":
+        opt = "call" if contract_type == "C" else "put"
+        atm_est = bs_price(spy_price, recommended_strike, T, 0.05, iv, opt)
+        otm_discount = max(0.35, 1.0 - (otm_offset * 0.2))
+        mid_premium = max(round(atm_est * otm_discount, 2), 0.05)
+
+    est_premium_low = real_bid if real_bid is not None else max(round(mid_premium * 0.85, 2), 0.01)
+    est_premium_high = real_ask if real_ask is not None else max(round(mid_premium * 1.15, 2), 0.10)
+
+    # 3. Dynamic target and stop prices
     target_pct, stop_pct = 50, 30
     target_price = round(mid_premium * 1.5, 2)
     stop_price = round(mid_premium * 0.7, 2)
     risk_per = round(mid_premium * (stop_pct / 100.0), 2)
     reward_per = round(mid_premium * (target_pct / 100.0), 2)
     rr_ratio = round(reward_per / risk_per, 2) if risk_per > 0 else 0
+
     max_risk_pct = 10.0
     max_risk_dollars = round(portfolio_cash * (max_risk_pct / 100.0), 2)
     cost_per_contract = round(mid_premium * 100, 2)
     max_contracts = max(1, int(max_risk_dollars / cost_per_contract)) if cost_per_contract > 0 else 0
+
+    # 4. Construct Option Chain payload for the frontend
+    option_chain_list = []
+    strike_center = int(round(spy_price)) if spy_price else 500
+    strikes_range = range(strike_center - 3, strike_center + 4)
+
+    for strike in strikes_range:
+        call_info = {"bid": None, "ask": None, "last": None, "source": "ESTIMATE"}
+        put_info = {"bid": None, "ask": None, "last": None, "source": "ESTIMATE"}
+
+        if chain_data and strike in chain_data:
+            # Live Call
+            c_snap = chain_data[strike]["call"]
+            if c_snap and c_snap.get("bid") is not None:
+                call_info = {"bid": c_snap["bid"], "ask": c_snap["ask"], "last": c_snap["last"], "source": "LIVE"}
+            # Live Put
+            p_snap = chain_data[strike]["put"]
+            if p_snap and p_snap.get("bid") is not None:
+                put_info = {"bid": p_snap["bid"], "ask": p_snap["ask"], "last": p_snap["last"], "source": "LIVE"}
+
+        # Fallback to BS if no live data
+        if call_info["source"] == "ESTIMATE":
+            c_est = bs_price(spy_price, strike, T, 0.05, iv, "call")
+            call_info["bid"] = max(round(c_est * 0.95, 2), 0.01)
+            call_info["ask"] = max(round(c_est * 1.05, 2), 0.02)
+            call_info["last"] = max(round(c_est, 2), 0.01)
+
+        if put_info["source"] == "ESTIMATE":
+            p_est = bs_price(spy_price, strike, T, 0.05, iv, "put")
+            put_info["bid"] = max(round(p_est * 0.95, 2), 0.01)
+            put_info["ask"] = max(round(p_est * 1.05, 2), 0.02)
+            put_info["last"] = max(round(p_est, 2), 0.01)
+
+        is_recommended = (strike == recommended_strike) and (direction_bias != "NEUTRAL" and signal_grade != "NONE")
+
+        option_chain_list.append({
+            "strike": strike,
+            "is_recommended": is_recommended,
+            "call": call_info,
+            "put": put_info
+        })
+
+    active_rec = (spy_price is not None) and (direction_bias != "NEUTRAL") and (signal_grade not in ("NONE",))
+
     return {
-        "active": True, "direction": type_label, "atm_strike": atm_strike,
+        "active": active_rec, "direction": type_label if active_rec else "NEUTRAL", "atm_strike": atm_strike,
         "recommended_strike": recommended_strike, "otm_offset": otm_offset,
-        "contract_label": contract_label, "contract_type": contract_type,
+        "contract_label": contract_label if active_rec else "SPY 0DTE", "contract_type": contract_type if active_rec else "C",
         "strikes": [
-            {"label": "ATM", "strike": atm_strike, "recommended": otm_offset == 0},
-            {"label": "OTM-1", "strike": otm_1, "recommended": otm_offset == 1},
-            {"label": "OTM-2", "strike": otm_2, "recommended": otm_offset == 2},
+            {"label": "ATM", "strike": atm_strike, "recommended": otm_offset == 0 and active_rec},
+            {"label": "OTM-1", "strike": otm_1, "recommended": otm_offset == 1 and active_rec},
+            {"label": "OTM-2", "strike": otm_2, "recommended": otm_offset == 2 and active_rec},
         ],
         "est_premium_low": est_premium_low, "est_premium_high": est_premium_high,
-        "mid_premium": mid_premium, "data_source": "BS_ESTIMATE",
-        "real_bid": None, "real_ask": None, "real_last": None,
+        "mid_premium": mid_premium, "data_source": data_source,
+        "real_bid": real_bid, "real_ask": real_ask, "real_last": real_last,
         "target_pct": target_pct, "stop_pct": stop_pct,
         "target_price": target_price, "stop_price": stop_price,
         "risk_reward": f"1:{rr_ratio}", "max_contracts": max_contracts,
         "cost_per_contract": cost_per_contract, "max_risk_dollars": max_risk_dollars,
         "max_risk_pct": max_risk_pct, "reasoning": strike_reasoning,
+        "option_chain": option_chain_list
     }
 
-RESTFUL_KV_URL = os.getenv(
-    "PORTFOLIO_REST_URL",
-    "https://api.restful-api.dev/objects/ff8081819d82fab6019e405b84415410",
-)
 PORTFOLIO_STORAGE_KEY = os.getenv("PORTFOLIO_STORAGE_KEY", "arungun_portfolio")
 MAX_TRADE_HISTORY = 250
 
@@ -319,7 +496,7 @@ def _storage_backend():
     url, token = _kv_credentials()
     if url and token:
         return "upstash"
-    return "restful"
+    return "local"
 
 
 # Use /tmp on Vercel serverless (read-only project filesystem)
@@ -367,14 +544,6 @@ def _fetch_raw_portfolio(retries=3):
                             data["_storage"] = "upstash"
                             _write_local_portfolio(data)
                             return data
-            else:
-                r = requests.get(RESTFUL_KV_URL, timeout=6)
-                if r.status_code == 200:
-                    data = r.json().get("data", {})
-                    if isinstance(data, dict) and "cash" in data:
-                        data["_storage"] = "restful"
-                        _write_local_portfolio(data)
-                        return data
         except Exception:
             pass
         time.sleep(0.15 * (attempt + 1))
@@ -385,20 +554,7 @@ def _fetch_raw_portfolio(retries=3):
         local_data["_storage"] = "local_file"
         return local_data
 
-    # Cross-backend migration: Upstash is primary but empty → try restful
-    if _storage_backend() == "upstash":
-        try:
-            r = requests.get(RESTFUL_KV_URL, timeout=6)
-            if r.status_code == 200:
-                data = r.json().get("data", {})
-                if isinstance(data, dict) and "cash" in data:
-                    data["_storage"] = "restful_migrated"
-                    return data
-        except Exception:
-            pass
-
     return None
-
 
 
 def _write_raw_portfolio(pf):
@@ -408,13 +564,12 @@ def _write_raw_portfolio(pf):
     }
     # Always write locally first to guarantee persistence
     local_ok = _write_local_portfolio(pf)
-    
-    body = json.loads(json.dumps({"name": PORTFOLIO_STORAGE_KEY, "data": payload_pf}, cls=SafeEncoder))
 
     remote_ok = False
     last_err = None
-    try:
-        if _storage_backend() == "upstash":
+
+    if _storage_backend() == "upstash":
+        try:
             base, token = _kv_credentials()
             raw = json.dumps(payload_pf, cls=SafeEncoder)
             r = requests.post(
@@ -425,24 +580,15 @@ def _write_raw_portfolio(pf):
             )
             r.raise_for_status()
             remote_ok = True
-        else:
-            for attempt in range(3):
-                try:
-                    r = requests.put(RESTFUL_KV_URL, json=body, timeout=12)
-                    r.raise_for_status()
-                    remote_ok = True
-                    break
-                except Exception as e:
-                    last_err = e
-                    time.sleep(0.2 * (attempt + 1))
-            if not remote_ok and last_err:
-                raise last_err
-    except Exception as e:
-        print(f"Remote portfolio save failed: {e}. Local copy is safe.")
-        last_err = e
+        except Exception as e:
+            print(f"Remote portfolio save failed: {e}. Local copy is safe.")
+            last_err = e
+    else:
+        # Local mode requires no remote write
+        remote_ok = True
 
     if local_ok:
-        if not remote_ok:
+        if not remote_ok and last_err:
             pf["_save_error"] = f"Remote failed ({last_err}), but local copy saved successfully."
         pf["_remote_ok"] = remote_ok
         return True
@@ -1012,10 +1158,24 @@ class handler(BaseHTTPRequestHandler):
                 K_buy = round(spy_p)
                 K_sell = K_buy + spread_w if opt == "call" else K_buy - spread_w
 
-                T_entry = 5.5 / (252 * 6.5)
-                lp = bs_price(spy_p, K_buy, T_entry, 0.05, iv, opt)
-                sp = bs_price(spy_p, K_sell, T_entry, 0.05, iv, opt)
-                net_debit = (lp - sp) * 1.03 + 0.04
+                # Try to use real option chain quotes for entry debit
+                real_entry_ok = False
+                net_debit = 0.0
+                chain_entry = _get_0dte_option_chain(spy_p, vix_val)
+                if chain_entry and K_buy in chain_entry and K_sell in chain_entry:
+                    buy_snap = chain_entry[K_buy][opt]
+                    sell_snap = chain_entry[K_sell][opt]
+                    if buy_snap and sell_snap and buy_snap.get("ask") is not None and sell_snap.get("bid") is not None:
+                        # Buy long at Ask, Sell short at Bid (Debit Spread debit cost)
+                        net_debit = buy_snap["ask"] - sell_snap["bid"]
+                        if net_debit > 0.02:
+                            real_entry_ok = True
+                
+                if not real_entry_ok:
+                    T_entry = 5.5 / (252 * 6.5)
+                    lp = bs_price(spy_p, K_buy, T_entry, 0.05, iv, opt)
+                    sp = bs_price(spy_p, K_sell, T_entry, 0.05, iv, opt)
+                    net_debit = (lp - sp) * 1.03 + 0.04
 
                 if net_debit > 0.05:
                     # Risk % scales with account tier & signal strength
@@ -1073,9 +1233,24 @@ class handler(BaseHTTPRequestHandler):
                 hours_rem = max(0.1, 16.0 - (now.hour + now.minute/60.0))
                 T_rem = hours_rem / (252 * 6.5)
                 
-                lp = bs_price(spy_p, open_pos["K_buy"], T_rem, 0.05, iv, opt)
-                sp = bs_price(spy_p, open_pos["K_sell"], T_rem, 0.05, iv, opt)
-                current_val = max(0, lp - sp) * 0.97 - 0.04
+                # Try to use real option chain quotes for exit valuation
+                real_exit_ok = False
+                current_val = 0.0
+                chain_exit = _get_0dte_option_chain(spy_p, vix_val)
+                if chain_exit and open_pos["K_buy"] in chain_exit and open_pos["K_sell"] in chain_exit:
+                    buy_snap = chain_exit[open_pos["K_buy"]][opt]
+                    sell_snap = chain_exit[open_pos["K_sell"]][opt]
+                    if buy_snap and sell_snap and buy_snap.get("bid") is not None and sell_snap.get("ask") is not None:
+                        # Sell long at Bid, Buy short at Ask (closing credit revenue)
+                        current_val = buy_snap["bid"] - sell_snap["ask"]
+                        real_exit_ok = True
+                
+                if not real_exit_ok:
+                    lp = bs_price(spy_p, open_pos["K_buy"], T_rem, 0.05, iv, opt)
+                    sp = bs_price(spy_p, open_pos["K_sell"], T_rem, 0.05, iv, opt)
+                    current_val = max(0, lp - sp) * 0.97 - 0.04
+
+                current_val = max(0, current_val)
                 mark_value = round(max(0, current_val), 2)
                 mark_revenue = round(mark_value * 100 * open_pos["contracts"], 2)
                 open_pos["current_val"] = mark_value
