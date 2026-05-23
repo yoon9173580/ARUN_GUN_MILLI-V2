@@ -1233,7 +1233,7 @@ class handler(BaseHTTPRequestHandler):
                 google_payload = _verify_google_token(credential)
                 if google_payload:
                     email = google_payload.get("email")
-                    allowed_emails_str = os.getenv("ALLOWED_EMAILS", "")
+                    allowed_emails_str = os.getenv("ALLOWED_EMAILS", "yoongun64@gmail.com")
                     allowed_emails = {e.strip().lower() for e in allowed_emails_str.split(",") if e.strip()}
                     if email and email.lower() in allowed_emails:
                         authorized = True
