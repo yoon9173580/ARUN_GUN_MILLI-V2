@@ -1353,10 +1353,31 @@ class handler(BaseHTTPRequestHandler):
                 portfolio_cash=portfolio.get("cash", STARTING_BALANCE), now_et=now,
             )
 
-            # Trading day counter (Day 1 = 2026-05-22)
+            # Day counters (Day 1 = 2026-05-22)
             start_dt = datetime.strptime(TRADING_START_DATE, "%Y-%m-%d").date()
             today_dt = now.date()
-            trading_day = max(1, (today_dt - start_dt).days + 1)
+            calendar_day = max(1, (today_dt - start_dt).days + 1)
+            # NYSE holidays 2026
+            nyse_holidays_2026 = {
+                datetime(2026,1,1).date(),    # New Year's Day
+                datetime(2026,1,19).date(),   # MLK Day
+                datetime(2026,2,16).date(),   # Presidents' Day
+                datetime(2026,4,3).date(),    # Good Friday
+                datetime(2026,5,25).date(),   # Memorial Day
+                datetime(2026,6,19).date(),   # Juneteenth
+                datetime(2026,7,3).date(),    # Independence Day (observed)
+                datetime(2026,9,7).date(),    # Labor Day
+                datetime(2026,11,26).date(),  # Thanksgiving
+                datetime(2026,12,25).date(),  # Christmas
+            }
+            # Trading day = weekdays (Mon-Fri) minus NYSE holidays
+            trading_day_count = 0
+            d = start_dt
+            while d <= today_dt:
+                if d.weekday() < 5 and d not in nyse_holidays_2026:
+                    trading_day_count += 1
+                d += timedelta(days=1)
+            trading_day = max(1, trading_day_count)
 
             final = {
                 "last_updated": ts, "fetch_status": "SUCCESS", "latency_ms": latency,
@@ -1365,6 +1386,7 @@ class handler(BaseHTTPRequestHandler):
                 "flashalpha": flashalpha_spy,
                 "session": "REGULAR" if is_regular else "CLOSED",
                 "trading_day": trading_day,
+                "calendar_day": calendar_day,
                 "trading_start_date": TRADING_START_DATE,
                 "briefing": f"{score_result['layers']['time_window']['emoji']} [{score_result['layers']['time_window']['window']}] Regime: {score_result['layers']['regime']['regime']} | Bias: {direction_bias} | Score: {normalized}/100",
                 "total_score": normalized, "max_score": active_max, "raw_score": raw_total,
