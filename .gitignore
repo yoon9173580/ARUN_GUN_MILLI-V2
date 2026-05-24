@@ -9,6 +9,10 @@ state.json
 paper_portfolio.json
 portfolio.json
 
+# Runtime caches / scratch (broker dryrun logs, bot state, ML weights)
+data_cache/
+*.jsonl
+
 # Environments
 .venv/
 venv/
