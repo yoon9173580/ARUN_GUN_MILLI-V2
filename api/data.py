@@ -1,6 +1,6 @@
 """
 Vercel Serverless API — /api/data
-ES Futures Signal Engine — 7-Layer Score Engine
+MES Futures Signal Engine — 7-Layer Score Engine
 Google SSO only + Session Cookie (Last Update: 2026-05-25)
 """
 import math, json, os, time, traceback, random
@@ -17,13 +17,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from engines.score_engine import run_score_engine
 STARTING_BALANCE = 10000.0
-TRADING_START_DATE = "2026-05-25"   # Day 1 of ES futures paper trading
+TRADING_START_DATE = "2026-05-25"   # Day 1 of MES futures paper trading
 
-# ES Futures Contract Specs
-ES_MULTIPLIER = 50.0       # $50 per point of S&P 500
-ES_COMMISSION_RT = 2.50    # Round-trip commission per contract
+# MES Futures Contract Specs
+ES_MULTIPLIER = 5.0        # $5 per point of S&P 500 (Micro E-mini)
+ES_COMMISSION_RT = 0.50    # Round-trip commission per contract
 ES_SLIPPAGE_PTS = 0.25     # 1 tick slippage per side
-ES_DAY_MARGIN = 500.0      # Day-trading margin per contract
+ES_DAY_MARGIN = 50.0       # Day-trading margin per contract
 ATR_SL_MULT = 1.5          # SL = 1.5x ATR(14)
 RISK_PCT = 0.12            # 12% Kelly-informed risk per trade
 
@@ -415,7 +415,7 @@ def _normalize_pf(pf):
                 "exit_time": h.get("exit_time"),
                 "direction": h.get("direction"),
                 "es_direction": h.get("es_direction"),
-                "instrument": h.get("instrument", "ES"),
+                "instrument": h.get("instrument", "MES"),
                 "entry_price": h.get("entry_price", h.get("entry_spy")),
                 "exit_price": h.get("exit_price", h.get("exit_spy")),
                 "contracts": h.get("contracts"),
@@ -854,7 +854,7 @@ def _record_position_close(portfolio, open_pos, today_str, now, spy_p, exit_val,
         "exit_time": open_pos.get("exit_time"),
         "direction": open_pos.get("direction"),
         "es_direction": open_pos.get("es_direction"),
-        "instrument": open_pos.get("instrument", "ES"),
+        "instrument": open_pos.get("instrument", "MES"),
         "contracts": open_pos.get("contracts"),
         "entry_price": open_pos.get("entry_price"),
         "exit_price": open_pos.get("exit_price"),
@@ -1293,10 +1293,10 @@ class handler(BaseHTTPRequestHandler):
                         sl_price = round(entry_price + sl_points, 2)
                         tp_price = round(entry_price - tp_points, 2)
                     
-                    trade_id = f"{today_str}-{now.strftime('%H%M%S')}-ES-{es_direction}"
+                    trade_id = f"{today_str}-{now.strftime('%H%M%S')}-MES-{es_direction}"
                     new_pos = _ensure_trade_id({
                         "trade_id": trade_id, "date": today_str, "status": "OPEN",
-                        "instrument": "ES", "direction": direction_bias,
+                        "instrument": "MES", "direction": direction_bias,
                         "es_direction": es_direction,
                         "entry_price": entry_price, "contracts": contracts,
                         "sl_price": sl_price, "tp_price": tp_price,
