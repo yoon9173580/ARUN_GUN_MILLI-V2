@@ -400,7 +400,7 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
     <div style="color:var(--muted);display:flex;gap:12px;align-items:center" class="mono">
       <span>SYNC: <span id="syncTime">--</span> | <span id="latency">--</span></span>
       <span id="dataSourceStatus" style="font-size:0.65rem;color:var(--cyan)">--</span>
-      <span onclick="logout()" style="cursor:pointer;color:var(--muted);margin-left:8px;" title="로그아웃 (창 닫거나 3시간 비활성 시 자동)">로그아웃</span>
+      <span id="logoutBtn" onclick="logout()" style="cursor:pointer;color:var(--muted);margin-left:8px; display:none;" title="로그아웃 (창 닫거나 3시간 비활성 시 자동)">로그아웃</span>
     </div>
   </div>
 
@@ -1511,6 +1511,18 @@ async function handleCredentialResponse(response) {
 // ── Logout + 3-hour inactivity auto-logout ─────────────────────────────
 async function logout() {
   sessionStorage.removeItem('hannae_auth_ok');   // clear per-page-open flag
+  stopDataPolling();
+
+  // Clear inactivity timer
+  if (typeof inactivityTimer !== 'undefined' && inactivityTimer) {
+    clearTimeout(inactivityTimer);
+    inactivityTimer = null;
+  }
+
+  // Hide logout button
+  const logoutBtn = document.getElementById('logoutBtn');
+  if (logoutBtn) logoutBtn.style.display = 'none';
+
   try {
     await fetch('/api/logout', {
       method: 'POST',
@@ -1519,8 +1531,8 @@ async function logout() {
   } catch (e) {
     console.warn('Logout request failed', e);
   }
-  // Re-probe → will receive 401 and show Google modal
-  loadData();
+
+  loadData(); // will hit the !hasLocalSession path and show modal
 }
 
 // Inactivity timer (3 hours)
@@ -1545,18 +1557,50 @@ function startInactivityProtection() {
   resetInactivityTimer();
 }
 
+// ── Smart polling control (pause when logged out) ─────────────────────
+let pollingTimer = null;
+
+function stopDataPolling() {
+  if (pollingTimer) {
+    clearTimeout(pollingTimer);
+    pollingTimer = null;
+  }
+}
+
+function startDataPolling() {
+  stopDataPolling();
+  pollingTimer = setTimeout(loadData, 15000);
+}
+
 async function loadData() {
   const t0 = performance.now();
   const hasLocalSession = !!sessionStorage.getItem('hannae_auth_ok');
 
+  // If no local per-tab auth flag → treat as logged out (even if cookie exists)
+  if (!hasLocalSession) {
+    stopDataPolling();
+    // Hide logout button
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) logoutBtn.style.display = 'none';
+
+    // Show login modal (this will also fetch client_id if needed)
+    try {
+      const r = await fetch('/api/data', { cache: 'no-store', credentials: 'include' });
+      const respData = await r.json().catch(() => ({}));
+      showGoogleAuthModal(respData.google_client_id);
+    } catch (e) {
+      showGoogleAuthModal(''); // fallback, will show "Client ID not configured"
+    }
+    return;
+  }
+
   try {
-    // Cookie-based auth only (set by Google SSO /api/unlock). No more legacy key.
+    // We have local flag + will check server cookie
     let r = await fetch('/api/data', { cache: 'no-store', credentials: 'include' });
     
-    // Force re-auth if:
-    // 1. Server says unauthorized (no cookie or invalid)
-    // 2. OR this tab has no local auth flag (new page open / new tab)
-    if (r.status === 401 || !hasLocalSession) {
+    if (r.status === 401) {
+      sessionStorage.removeItem('hannae_auth_ok');
+      stopDataPolling();
       const respData = await r.json().catch(() => ({}));
       showGoogleAuthModal(respData.google_client_id);
       return;
@@ -1572,22 +1616,32 @@ async function loadData() {
       data.latency_ms = Math.round((data.latency_ms||0) + (performance.now()-t0));
       render(data);
 
-      // Start 3h inactivity protection only on the very first successful load
+      // Show logout button now that we're properly authenticated in this tab
+      const logoutBtn = document.getElementById('logoutBtn');
+      if (logoutBtn) logoutBtn.style.display = '';
+
+      // Start inactivity timer only on first successful authenticated load
       if (!window.__inactivityStarted) {
         window.__inactivityStarted = true;
         startInactivityProtection();
       }
+
+      // Schedule next poll only when authenticated
+      startDataPolling();
+      return; // important: do not fall through
     }
   } catch(e) { 
     console.error('Fetch error:', e); 
   }
-  setTimeout(loadData, 15000);
+
+  // If we reach here with an error while authenticated, still try again later
+  startDataPolling();
 }
 
-// === Strict: require Google login EVERY time the page is opened (new tab / new window) ===
+// === Strict per-page-open login (new tab / new window / after close) ===
+// Proactively clear any stale server cookie on fresh open.
+// loadData() itself will then force the Google modal because of missing local flag.
 if (!sessionStorage.getItem('hannae_auth_ok')) {
-  // Fresh page open (no auth flag for this tab/sessionStorage)
-  // Immediately invalidate any existing server cookie and force the login modal
   fetch('/api/logout', { method: 'POST', credentials: 'include', keepalive: true }).catch(() => {});
 }
 
