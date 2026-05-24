@@ -1567,9 +1567,9 @@ function stopDataPolling() {
   }
 }
 
-function startDataPolling() {
+function startDataPolling(intervalMs = 15000) {
   stopDataPolling();
-  pollingTimer = setTimeout(loadData, 15000);
+  pollingTimer = setTimeout(loadData, intervalMs);
 }
 
 async function loadData() {
@@ -1626,8 +1626,18 @@ async function loadData() {
         startInactivityProtection();
       }
 
-      // Schedule next poll only when authenticated
-      startDataPolling();
+      // Smart polling based on market_status from backend
+      const marketStatus = data.market_status || 'regular';
+      let nextInterval = 15000;
+
+      if (marketStatus === 'closed') {
+        nextInterval = 5 * 60 * 1000;           // 5 minutes when fully closed
+      } else if (marketStatus === 'pre_market' || marketStatus === 'after_hours') {
+        nextInterval = 30000;                   // 30 seconds during extended hours
+      }
+      // 'regular' → 15 seconds (default)
+
+      startDataPolling(nextInterval);
       return; // important: do not fall through
     }
   } catch(e) { 

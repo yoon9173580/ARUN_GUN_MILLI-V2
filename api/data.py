@@ -165,29 +165,59 @@ def _flashalpha_spy_summary():
     return None
 
 
-def is_market_open(dt):
-    """Detect if US stock market is currently open (9:30 AM to 4:00 PM Eastern Time, weekdays only, no NYSE holidays)."""
-    # 1. Weekdays only (Monday=0 to Sunday=6)
+def get_market_status(dt):
+    """
+    Returns market status for smart API usage:
+      'regular'      → 9:30 ~ 16:00 ET (full live)
+      'pre_market'   → 8:30 ~ 9:30 ET (1h before open)
+      'after_hours'  → 16:00 ~ 17:00 ET (1h after close)
+      'closed'       → everything else (including weekends & holidays)
+
+    This allows us to:
+    - Keep fresh data during extended hours (pre/after)
+    - Aggressively reduce calls deep into the night / weekends
+    """
+    # 1. Weekends
     if dt.weekday() >= 5:
-        return False
+        return 'closed'
+
     # 2. NYSE holidays 2026
     nyse_holidays_2026 = {
-        datetime(2026, 1, 1).date(),    # New Year's Day
-        datetime(2026, 1, 19).date(),   # MLK Day
-        datetime(2026, 2, 16).date(),   # Presidents' Day
-        datetime(2026, 4, 3).date(),    # Good Friday
-        datetime(2026, 5, 25).date(),   # Memorial Day
-        datetime(2026, 6, 19).date(),   # Juneteenth
-        datetime(2026, 7, 3).date(),    # Independence Day (observed)
-        datetime(2026, 9, 7).date(),    # Labor Day
-        datetime(2026, 11, 26).date(),  # Thanksgiving
-        datetime(2026, 12, 25).date(),  # Christmas
+        datetime(2026, 1, 1).date(),
+        datetime(2026, 1, 19).date(),
+        datetime(2026, 2, 16).date(),
+        datetime(2026, 4, 3).date(),
+        datetime(2026, 5, 25).date(),
+        datetime(2026, 6, 19).date(),
+        datetime(2026, 7, 3).date(),
+        datetime(2026, 9, 7).date(),
+        datetime(2026, 11, 26).date(),
+        datetime(2026, 12, 25).date(),
     }
     if dt.date() in nyse_holidays_2026:
-        return False
-    # 3. Regular hours: 9:30 AM to 4:00 PM Eastern
+        return 'closed'
+
     t_min = dt.hour * 60 + dt.minute
-    return 570 <= t_min <= 960
+
+    # 3. Regular trading hours
+    if 570 <= t_min <= 960:           # 9:30 ~ 16:00
+        return 'regular'
+
+    # 4. Pre-market (1 hour before)
+    if 510 <= t_min < 570:            # 8:30 ~ 9:30
+        return 'pre_market'
+
+    # 5. After-hours (1 hour after)
+    if 960 < t_min <= 1020:           # 16:00 ~ 17:00
+        return 'after_hours'
+
+    # 6. Deep night / early morning
+    return 'closed'
+
+
+def is_market_open(dt):
+    """Legacy helper — returns True only during regular hours (for backward compatibility)."""
+    return get_market_status(dt) == 'regular'
 
 _MARKET_DATA_CACHE = {
     "fetched_at": 0.0,
@@ -203,8 +233,16 @@ def _fetch_market_bundle(all_stocks):
     global _MARKET_DATA_CACHE
     
     now = datetime.now(NY)
-    m_open = is_market_open(now)
-    ttl = 10 if m_open else 1800  # 10 seconds if open, 30 minutes if closed
+    status = get_market_status(now)
+
+    if status in ('regular', 'pre_market', 'after_hours'):
+        # Treat extended hours (1h before/after) the same as regular for freshness
+        ttl = 10
+        fetch_options = True
+    else:
+        # Fully closed (night, weekends, holidays) → very aggressive caching
+        ttl = 7200          # 2 hours
+        fetch_options = False
     
     current_time = time.time()
     use_cache = False
@@ -294,9 +332,11 @@ def _get_0dte_option_chain(spy_price, vix_price):
     if not spy_price:
         return None
         
-    # Optimization: Skip API calls and let it fallback to BS directly when market is closed
+    # Optimization: Only fetch real options during extended market hours
+    # (pre-market 8:30~, regular, after-hours ~17:00). Skip deep night / weekends.
     now_ny = datetime.now(NY)
-    if not is_market_open(now_ny):
+    status = get_market_status(now_ny)
+    if status == 'closed':
         return None
     api_key = ALPACA_HEADERS.get("APCA-API-KEY-ID", "")
     api_secret = ALPACA_HEADERS.get("APCA-API-SECRET-KEY", "")
@@ -1354,6 +1394,9 @@ class handler(BaseHTTPRequestHandler):
             flashalpha_spy = bundle.get("flashalpha")
             fetch_timing = bundle.get("timing_ms", {})
 
+            # Compute market status for response + frontend optimization
+            status = get_market_status(now)
+
             spy_p = _snap_price(snaps.get("SPY", {}))
             spy_prev = _snap_prev_close(snaps.get("SPY", {})) or spy_p
             
@@ -1678,6 +1721,7 @@ class handler(BaseHTTPRequestHandler):
                 "data_source": "ALPACA + FlashAlpha" if flashalpha_spy else "ALPACA",
                 "flashalpha": flashalpha_spy,
                 "session": "REGULAR" if is_regular else "CLOSED",
+                "market_status": status,                    # NEW: regular / pre_market / after_hours / closed
                 "trading_day": trading_day,
                 "calendar_day": calendar_day,
                 "trading_start_date": TRADING_START_DATE,
