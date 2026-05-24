@@ -58,45 +58,59 @@ def get_trading_days(start: datetime, end: datetime) -> List[datetime]:
 
 def fetch_5min_bars(symbol: str, start: datetime, end: datetime) -> pd.DataFrame:
     """
-    Fetch 5-minute bars using Alpaca Historical (with pagination).
+    Fetch 5-minute bars using Alpaca Historical with monthly caching for speed.
     """
-    print(f"  Fetching 5min bars for {symbol} from {start.date()} to {end.date()}...")
+    cache_dir = "backtest_cache"
+    os.makedirs(cache_dir, exist_ok=True)
 
-    all_bars = []
-    current_start = start
+    all_dfs = []
+    current = start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
 
-    while current_start < end:
-        request = StockBarsRequest(
-            symbol_or_symbols=symbol,
-            timeframe=TimeFrame(5, TimeFrameUnit.Minute),
-            start=current_start,
-            end=end,
-            limit=10000,  # max per request
-        )
-        try:
-            bars = stock_client.get_stock_bars(request).df
-            if bars.empty:
-                break
-            all_bars.append(bars)
-            # Move start to after last bar
-            last_ts = bars.index[-1]
-            current_start = last_ts + timedelta(minutes=5)
-        except Exception as e:
-            print(f"    Error fetching bars: {e}")
-            break
+    while current < end:
+        month_end = (current + timedelta(days=32)).replace(day=1) - timedelta(seconds=1)
+        if month_end > end:
+            month_end = end
 
-    if not all_bars:
+        cache_file = os.path.join(cache_dir, f"{symbol}_{current.strftime('%Y-%m')}.parquet")
+
+        if os.path.exists(cache_file):
+            df_month = pd.read_parquet(cache_file)
+        else:
+            print(f"  Downloading {symbol} 5min for {current.strftime('%Y-%m')} ...")
+            request = StockBarsRequest(
+                symbol_or_symbols=symbol,
+                timeframe=TimeFrame(5, TimeFrameUnit.Minute),
+                start=current,
+                end=month_end,
+                limit=10000,
+            )
+            try:
+                bars = stock_client.get_stock_bars(request).df
+                if not bars.empty:
+                    bars.to_parquet(cache_file)
+                    df_month = bars
+                else:
+                    df_month = pd.DataFrame()
+            except Exception as e:
+                print(f"    Error: {e}")
+                df_month = pd.DataFrame()
+
+        if not df_month.empty:
+            all_dfs.append(df_month)
+
+        current = month_end + timedelta(seconds=1)
+
+    if not all_dfs:
         return pd.DataFrame()
 
-    df = pd.concat(all_bars)
+    df = pd.concat(all_dfs)
     df = df.reset_index()
     df = df[df["symbol"] == symbol].copy()
-    df = df.set_index("timestamp")
-    df = df.sort_index()
+    df = df.set_index("timestamp").sort_index()
 
-    # Resample to regular 5-min grid if needed (Alpaca returns irregular sometimes)
+    # Clean columns
     df = df[["open", "high", "low", "close", "volume"]].rename(columns=str.capitalize)
-    return df
+    return df[df.index >= start]  # trim to requested range
 
 
 def prepare_daily_context(df_5min: pd.DataFrame, date: datetime) -> Dict:
