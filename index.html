@@ -1494,6 +1494,7 @@ async function handleCredentialResponse(response) {
     if (r.ok) {
       const m = document.getElementById('googleAuthModal');
       if (m) m.remove();
+      sessionStorage.setItem('hannae_auth_ok', '1');   // mark this tab as authenticated
       loadData();
     } else {
       const errEl = document.getElementById('googleAuthErr');
@@ -1509,6 +1510,7 @@ async function handleCredentialResponse(response) {
 
 // ── Logout + 3-hour inactivity auto-logout ─────────────────────────────
 async function logout() {
+  sessionStorage.removeItem('hannae_auth_ok');   // clear per-page-open flag
   try {
     await fetch('/api/logout', {
       method: 'POST',
@@ -1576,6 +1578,14 @@ async function loadData() {
   }
   setTimeout(loadData, 15000);
 }
+
+// === Strict: require Google login EVERY time the page is opened (new tab / new window) ===
+if (!sessionStorage.getItem('hannae_auth_ok')) {
+  // Fresh page open (no auth flag for this tab/sessionStorage)
+  // Immediately invalidate any existing server cookie and force the login modal
+  fetch('/api/logout', { method: 'POST', credentials: 'include', keepalive: true }).catch(() => {});
+}
+
 loadData();
 </script>
 </body>
