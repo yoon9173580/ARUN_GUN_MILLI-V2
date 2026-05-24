@@ -115,7 +115,7 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
     
     # SPREAD PARAMETERS
     SPREAD_WIDTH = 5.0
-    TP_PCT = 1.0  # +100% Take Profit
+    TP_PCT = 0.50  # +50% Take Profit
     SPREAD_PCT = 0.03 # 3% bid-ask spread friction
     MIN_SCORE = 90
     
@@ -169,7 +169,10 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
         # Calculate morning technical metrics strictly up to 10:30 AM
         vwap_morning = (df_morning["High"] * df_morning["Volume"]).sum() / df_morning["Volume"].sum() if df_morning["Volume"].sum() > 0 else spy_entry_o
         range_morning = float(df_morning["High"].max() - df_morning["Low"].min())
-        vol_ratio = 1.6 # Good volume ratio for momentum
+        # Calculate real-time dynamic Volume Ratio (last 5-min average volume vs overall morning average)
+        avg_5min_vol = df_morning["Volume"].tail(5).mean()
+        avg_morning_vol = df_morning["Volume"].mean()
+        vol_ratio = avg_5min_vol / avg_morning_vol if avg_morning_vol > 0 else 1.0
         
         # Check scores using 10:30 AM NY time context
         try:
@@ -219,15 +222,31 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
             continue
             
         # ── ENTER TRADE SIMULATION ──
-        # Handle option direction inversion (counter-trend fading)
-        if invert:
-            opt = "put" if direction == "CALL" else "call"
-        else:
+        # Day-by-day Regime Detection for Adaptive Strategy Switching
+        adx_val = regime.get("details", {}).get("adx", {}).get("value")
+        
+        # Decide dynamic strategy direction switching based on VIX & ADX
+        # Standard Trend Following is the default because of SPY's massive secular bull market.
+        # Only switch to Counter-Trend Mean-Reversion when VIX is highly elevated (>= 22.0)
+        is_trending = (vix_val < 22.0)
+        
+        if is_trending:
+            # Follow the technical direction bias (Standard)
             opt = "call" if direction == "CALL" else "put"
+            strategy_used = "TREND_FOLLOW"
+        else:
+            # Fade the morning momentum (Mean Reversion / Inverted)
+            opt = "put" if direction == "CALL" else "call"
+            strategy_used = "MEAN_REVERSION"
             
+        # VIX-Adaptive SPREAD WIDTH
+        # If VIX >= 20.0 (high volatility / high premiums), expand spread to 10.0 to capture wider swings
+        # If VIX < 20.0, keep normal 5.0 spread width
+        active_spread_width = 10.0 if vix_val >= 20.0 else 5.0
+        
         iv = vix_val / 100.0
         K_buy = round(spy_entry_o)
-        K_sell = K_buy + SPREAD_WIDTH if opt == "call" else K_buy - SPREAD_WIDTH
+        K_sell = K_buy + active_spread_width if opt == "call" else K_buy - active_spread_width
         
         # Entry time remaining = 5.5 hours to 4:00 PM (330 minutes)
         T_entry = 330.0 / (252.0 * 390.0)
@@ -242,6 +261,7 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
         if net_debit <= 0.05:
             continue
         tp_price = net_debit * (1 + TP_PCT)
+        sl_price = net_debit * 0.50
         
         # Sizing (Applying original Layer 7 Risk Manager: strictly 2.0% max trade loss)
         max_risk = balance * 0.02
@@ -273,17 +293,27 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
                 # Check worst price for SL and best price for TP
                 if opt == "call":
                     best_underlying = h_bar
+                    worst_underlying = l_bar
                 else:
                     best_underlying = l_bar
+                    worst_underlying = h_bar
                     
                 # Calculate option spread values
                 best_opt_val = max(bs_price(best_underlying, K_buy, T_rem, r_rate, iv, opt) - bs_price(best_underlying, K_sell, T_rem, r_rate, iv, opt), 0.0)
-                best_exit = best_opt_val * (1 - SPREAD_PCT)
+                best_exit = best_opt_val * (1 - SPREAD_PCT) - slip
+                
+                worst_opt_val = max(bs_price(worst_underlying, K_buy, T_rem, r_rate, iv, opt) - bs_price(worst_underlying, K_sell, T_rem, r_rate, iv, opt), 0.0)
+                worst_exit = worst_opt_val * (1 - SPREAD_PCT) - slip
                 
                 # Check exit conditions
                 if best_exit >= tp_price:
-                    exit_val = tp_price - slip
+                    exit_val = tp_price
                     exit_type = "TP"
+                    exit_time_str = ts_bar.strftime("%H:%M")
+                    break
+                elif worst_exit <= sl_price:
+                    exit_val = sl_price
+                    exit_type = "SL"
                     exit_time_str = ts_bar.strftime("%H:%M")
                     break
                     
@@ -324,6 +354,8 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
             "score": normalized,
             "orig_direction": direction,
             "trade_direction": opt.upper(),
+            "strategy": strategy_used,
+            "spread_width": active_spread_width,
             "K_buy": K_buy,
             "K_sell": K_sell,
             "net_debit": round(net_debit, 2),

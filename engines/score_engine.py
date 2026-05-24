@@ -230,14 +230,26 @@ def run_score_engine(now_et: datetime,
         signal["label"] = f"MARKET {session_name}"
         signal["action"] = "Market not in session"
 
-    # ── DIRECTION BIAS (Counter-Trend Inversion Applied) ──────────
+    # ── DIRECTION BIAS (Adaptive Regime Strategy Switching Applied) ──────────
     raw_bias = layers["technical"].get("direction_bias", "NEUTRAL")
-    if raw_bias == "CALL":
-        direction_bias = "PUT"
-    elif raw_bias == "PUT":
-        direction_bias = "CALL"
+    
+    # Extract ADX and VIX values
+    adx_val = layers["regime"].get("details", {}).get("adx", {}).get("value")
+    
+    # Dynamic strategy switching criteria (must match thorough_backtest_csv.py)
+    is_trending = (vix_price < 22.0)
+    
+    if is_trending:
+        # Standard: Follow the technical direction bias (Trend Following)
+        direction_bias = raw_bias
     else:
-        direction_bias = "NEUTRAL"
+        # Inverted: Fade the direction bias (Counter-Trend / Mean Reversion)
+        if raw_bias == "CALL":
+            direction_bias = "PUT"
+        elif raw_bias == "PUT":
+            direction_bias = "CALL"
+        else:
+            direction_bias = "NEUTRAL"
 
     # ── BUILD FINAL OUTPUT ──────────────────────────────────────
     return {
