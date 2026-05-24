@@ -1629,12 +1629,15 @@ async function loadData() {
       // Smart polling: active during regular + extended hours (pre/after)
       const marketStatus = data.market_status || 'regular';
 
+      // Since Options API is disabled by default (ENABLE_OPTIONS_API=false),
+      // we can afford more aggressive polling during regular market hours.
+      // User plans to run this for ~3 months of live trading.
       if (marketStatus === 'regular') {
-        startDataPolling(15000);                    // 15s during core trading hours
+        startDataPolling(10000);                    // 10 seconds during core hours (more aggressive, safe without Options API)
       } else if (marketStatus === 'pre_market' || marketStatus === 'after_hours') {
-        startDataPolling(5 * 60 * 1000);            // 5 minutes during extended hours (cost priority - A)
+        startDataPolling(5 * 60 * 1000);            // 5 minutes during extended hours (cost priority)
       } else {
-        // Fully closed → stop auto polling completely
+        // Fully closed (night/weekends) → minimal or no polling
         stopDataPolling();
       }
 
@@ -1644,14 +1647,13 @@ async function loadData() {
     console.error('Fetch error:', e); 
   }
 
-  // Fallback: only continue polling if we are in active market window
+  // Fallback polling (used when previous data fetch had error)
   const lastMarketStatus = (typeof data !== 'undefined' && data.market_status) || 'regular';
   if (lastMarketStatus === 'regular') {
-    startDataPolling(15000);
+    startDataPolling(10000);   // 10s (aggressive, safe without Options API)
   } else if (lastMarketStatus === 'pre_market' || lastMarketStatus === 'after_hours') {
-    startDataPolling(5 * 60 * 1000);   // 5 min in extended (cost priority)
+    startDataPolling(5 * 60 * 1000);
   }
-  // else: closed → do not auto-poll
 }
 
 // === Force re-auth on EVERY page load / refresh (F5, Ctrl+R, etc.) ===
