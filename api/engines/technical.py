@@ -7,11 +7,18 @@ import pandas as pd
 
 
 def _score_vwap_position(spy_price: float, vwap: float) -> tuple:
-    """Price vs VWAP: above = Long bias, below = Short bias."""
-    if spy_price is None or vwap is None:
+    """Price vs VWAP: above = Long bias, below = Short bias.
+
+    When VWAP isn't available (None/0) or equals price exactly, return NEUTRAL
+    with 0 points — otherwise /api/data injects a phantom SHORT vote with 10
+    points every time bar data is missing (vwap defaults to spy_p upstream).
+    """
+    if spy_price is None or vwap is None or vwap <= 0:
         return 0, "NEUTRAL", "VWAP data unavailable"
     dist = spy_price - vwap
-    pct = (dist / vwap) * 100 if vwap != 0 else 0
+    if dist == 0:
+        return 0, "NEUTRAL", "Price at VWAP — no directional edge"
+    pct = (dist / vwap) * 100
 
     if dist > 0:
         return 10, "LONG", f"Above VWAP by ${dist:+.2f} ({pct:+.2f}%)"
