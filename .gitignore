@@ -13,6 +13,11 @@ portfolio.json
 data_cache/
 *.jsonl
 
+# Large local data + backtest result artifacts (regenerable)
+SPY_1min_data.csv
+*_1min_data.csv
+backtest_v4.json
+
 # Environments
 .venv/
 venv/

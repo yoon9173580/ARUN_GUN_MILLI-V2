@@ -16,6 +16,7 @@ import numpy as np
 from tqdm import tqdm
 import pytz
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "api"))
 from engines.score_engine import run_score_engine
 from engines.regime import calculate_regime_score
@@ -36,6 +37,60 @@ def bs_price(S, K, T, r, sigma, opt="call"):
     if opt == "call":
         return S * norm_cdf(d1) - K * math.exp(-r * T) * norm_cdf(d2)
     return K * math.exp(-r * T) * norm_cdf(-d2) - S * norm_cdf(-d1)
+
+def consensus_direction(spy_price, vwap, rsi, spy_morning_ret, pcts, df_morning):
+    """5-voter consensus for direction. Returns 'LONG', 'SHORT', or 'NEUTRAL'."""
+    votes = {"LONG": 0, "SHORT": 0}
+
+    # 1. VWAP position
+    if spy_price is not None and vwap is not None:
+        if spy_price > vwap:
+            votes["LONG"] += 1
+        elif spy_price < vwap:
+            votes["SHORT"] += 1
+
+    # 2. RSI momentum
+    if rsi is not None:
+        if rsi >= 55:
+            votes["LONG"] += 1
+        elif rsi <= 45:
+            votes["SHORT"] += 1
+
+    # 3. Morning return sign (need meaningful move, > 0.15%)
+    if spy_morning_ret is not None:
+        if spy_morning_ret > 0.15:
+            votes["LONG"] += 1
+        elif spy_morning_ret < -0.15:
+            votes["SHORT"] += 1
+
+    # 4. Sector breadth (SPY + QQQ + IWM)
+    if pcts:
+        agree_long = sum(1 for k in ("SPY", "QQQ", "IWM") if pcts.get(k, 0) > 0.10)
+        agree_short = sum(1 for k in ("SPY", "QQQ", "IWM") if pcts.get(k, 0) < -0.10)
+        if agree_long >= 2:
+            votes["LONG"] += 1
+        elif agree_short >= 2:
+            votes["SHORT"] += 1
+
+    # 5. EMA cross (5-bar vs 20-bar on Close)
+    try:
+        if df_morning is not None and len(df_morning) >= 20:
+            ema5 = df_morning["Close"].ewm(span=5, adjust=False).mean().iloc[-1]
+            ema20 = df_morning["Close"].ewm(span=20, adjust=False).mean().iloc[-1]
+            if ema5 > ema20:
+                votes["LONG"] += 1
+            elif ema5 < ema20:
+                votes["SHORT"] += 1
+    except Exception:
+        pass
+
+    # Require majority of >=3 to act; otherwise NEUTRAL (skip trade)
+    if votes["LONG"] >= 3 and votes["LONG"] > votes["SHORT"]:
+        return "LONG"
+    if votes["SHORT"] >= 3 and votes["SHORT"] > votes["LONG"]:
+        return "SHORT"
+    return "NEUTRAL"
+
 
 def dynamic_slippage(vix, spy_range_pct=0.0):
     """VIX-adaptive slippage per contract side."""
@@ -81,7 +136,7 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
     print("[*] Parsing timestamps...")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df.set_index("timestamp", inplace=True)
-    df.index = df.index.tz_convert(NY)
+    df.index = df.index.tz_localize("UTC").tz_convert(NY)
     df = df.sort_index()
     
     # Filter dates
@@ -117,7 +172,7 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
     SPREAD_WIDTH = 5.0
     TP_PCT = 0.50  # +50% Take Profit
     SPREAD_PCT = 0.03 # 3% bid-ask spread friction
-    MIN_SCORE = 90
+    MIN_SCORE = 95
     
     pbar = tqdm(trading_days, desc="Backtesting Days")
     
@@ -139,6 +194,10 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
             vix_val = float(vix_series.loc[day_str])
         except:
             vix_val = 18.0
+
+        # VIX dead-zone filter — skip low-conviction regimes
+        if vix_val < 13.0 or vix_val > 30.0:
+            continue
             
         # Run Score Engine at 10:30 AM
         entry_time = dtime(10, 30)
@@ -167,7 +226,8 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
         }
         
         # Calculate morning technical metrics strictly up to 10:30 AM
-        vwap_morning = (df_morning["High"] * df_morning["Volume"]).sum() / df_morning["Volume"].sum() if df_morning["Volume"].sum() > 0 else spy_entry_o
+        tp_series = (df_morning["High"] + df_morning["Low"] + df_morning["Close"]) / 3.0
+        vwap_morning = (tp_series * df_morning["Volume"]).sum() / df_morning["Volume"].sum() if df_morning["Volume"].sum() > 0 else spy_entry_o
         range_morning = float(df_morning["High"].max() - df_morning["Low"].min())
         # Calculate real-time dynamic Volume Ratio (last 5-min average volume vs overall morning average)
         avg_5min_vol = df_morning["Volume"].tail(5).mean()
@@ -193,9 +253,14 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
             normalized = int((total_score / active_max) * 100) if active_max > 0 else 0
             
             grade = "STRONG" if normalized >= MIN_SCORE else "MODERATE" if normalized >= 75 else "WEAK" if normalized >= 60 else "NONE"
-            direction = tech.get("direction_bias", "NEUTRAL")
-        except Exception:
-            continue
+            # Override direction with 5-voter consensus (>=3 majority required)
+            rsi_val_for_vote = tech.get("rsi")
+            direction = consensus_direction(spy_entry_o, vwap_morning, rsi_val_for_vote, spy_morning_ret, pcts, df_morning)
+        except Exception as e:
+            print(f"Engine Error on {day_str}: {e}")
+            import traceback
+            traceback.print_exc()
+            sys.exit(1)
             
         # ── RUNAWAY TREND VETO FILTER ───────────────────────────────
         is_runaway_trend = False
@@ -218,7 +283,7 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
             is_runaway_trend = True
             
         # Entry Filters
-        if normalized < MIN_SCORE or grade != "STRONG" or direction not in ("CALL", "PUT") or is_runaway_trend:
+        if normalized < MIN_SCORE or grade not in ("STRONG", "MODERATE") or direction not in ("CALL", "PUT", "LONG", "SHORT") or is_runaway_trend:
             continue
             
         # ── ENTER TRADE SIMULATION ──
@@ -232,16 +297,14 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
         
         if is_trending:
             # Follow the technical direction bias (Standard)
-            opt = "call" if direction == "CALL" else "put"
+            opt = "call" if direction in ("CALL", "LONG") else "put"
             strategy_used = "TREND_FOLLOW"
         else:
             # Fade the morning momentum (Mean Reversion / Inverted)
-            opt = "put" if direction == "CALL" else "call"
+            opt = "put" if direction in ("CALL", "LONG") else "call"
             strategy_used = "MEAN_REVERSION"
             
-        # VIX-Adaptive SPREAD WIDTH
-        # If VIX >= 20.0 (high volatility / high premiums), expand spread to 10.0 to capture wider swings
-        # If VIX < 20.0, keep normal 5.0 spread width
+        # VIX-Adaptive SPREAD WIDTH: 10 at high VIX (more room), 5 at low VIX
         active_spread_width = 10.0 if vix_val >= 20.0 else 5.0
         
         iv = vix_val / 100.0
@@ -261,13 +324,12 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
         if net_debit <= 0.05:
             continue
         tp_price = net_debit * (1 + TP_PCT)
-        sl_price = net_debit * 0.50
+        sl_price = net_debit * 0.70  # -30% SL (tighter loss cap)
         
-        # Sizing (Applying original Layer 7 Risk Manager: strictly 2.0% max trade loss)
+        # Sizing — conservative: cap max loss to 2% of balance using full debit
         max_risk = balance * 0.02
         num_contracts = int(max_risk / (net_debit * 100))
         if num_contracts == 0:
-            # Allow 1 contract for small accounts if it doesn't exceed 10% of total balance
             if net_debit * 100 <= balance * 0.10:
                 num_contracts = 1
             else:
@@ -290,29 +352,30 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
                 minutes_to_close = max(1.0, (datetime.combine(ts_bar.date(), dtime(16,0)).replace(tzinfo=NY) - ts_bar).total_seconds() / 60.0)
                 T_rem = minutes_to_close / (252.0 * 390.0)
                 
-                # Check worst price for SL and best price for TP
+                # TP uses best-of-bar (intrabar wick can trigger profit take),
+                # SL uses bar CLOSE (avoid getting whipsawed by noise wicks).
                 if opt == "call":
                     best_underlying = h_bar
-                    worst_underlying = l_bar
                 else:
                     best_underlying = l_bar
-                    worst_underlying = h_bar
-                    
-                # Calculate option spread values
+                close_underlying = c_bar
+
+                # Best intrabar option value (for TP)
                 best_opt_val = max(bs_price(best_underlying, K_buy, T_rem, r_rate, iv, opt) - bs_price(best_underlying, K_sell, T_rem, r_rate, iv, opt), 0.0)
                 best_exit = best_opt_val * (1 - SPREAD_PCT) - slip
-                
-                worst_opt_val = max(bs_price(worst_underlying, K_buy, T_rem, r_rate, iv, opt) - bs_price(worst_underlying, K_sell, T_rem, r_rate, iv, opt), 0.0)
-                worst_exit = worst_opt_val * (1 - SPREAD_PCT) - slip
-                
+
+                # Bar-close option value (for SL)
+                close_opt_val = max(bs_price(close_underlying, K_buy, T_rem, r_rate, iv, opt) - bs_price(close_underlying, K_sell, T_rem, r_rate, iv, opt), 0.0)
+                close_exit = close_opt_val * (1 - SPREAD_PCT) - slip
+
                 # Check exit conditions
                 if best_exit >= tp_price:
                     exit_val = tp_price
                     exit_type = "TP"
                     exit_time_str = ts_bar.strftime("%H:%M")
                     break
-                elif worst_exit <= sl_price:
-                    exit_val = sl_price
+                elif close_exit <= sl_price:
+                    exit_val = close_exit
                     exit_type = "SL"
                     exit_time_str = ts_bar.strftime("%H:%M")
                     break
@@ -349,6 +412,15 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
             if prev_balance > 0 and abs(total_pnl) / prev_balance >= 0.06:
                 lockout_cooldown = 3
             
+        # Determine dominant layer by score / max ratio
+        layer_ratios = {
+            "regime": regime["score"] / max(regime["max"], 1),
+            "correlation": corr["score"] / max(corr["max"], 1),
+            "time": time_win["score"] / max(time_win["max"], 1),
+            "technical": tech["score"] / max(tech["max"], 1),
+        }
+        dominant_layer = max(layer_ratios, key=layer_ratios.get)
+
         trades.append({
             "date": day_str,
             "score": normalized,
@@ -365,7 +437,20 @@ def run_thorough_csv_backtest(csv_path: str, start_str: str = "2024-05-01", end_
             "contracts": num_contracts,
             "pnl": round(total_pnl, 2),
             "balance": round(balance, 2),
-            "vix": round(vix_val, 1)
+            "vix": round(vix_val, 1),
+            "layer_scores": {
+                "regime": regime["score"],
+                "correlation": corr["score"],
+                "time": time_win["score"],
+                "technical": tech["score"],
+            },
+            "layer_max": {
+                "regime": regime["max"],
+                "correlation": corr["max"],
+                "time": time_win["max"],
+                "technical": tech["max"],
+            },
+            "dominant_layer": dominant_layer,
         })
         
         pbar.set_postfix({"Balance": f"${balance:,.2f}", "WR": f"{wins/(wins+losses)*100 if wins+losses>0 else 0:.1f}%"})
