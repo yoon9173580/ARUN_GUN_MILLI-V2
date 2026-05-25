@@ -120,7 +120,7 @@ FUTURES_PROXIES = {
 }
 FLASHALPHA_API_KEY = os.getenv("FLASHALPHA_API_KEY", "")
 FLASHALPHA_API_URL = "https://lab.flashalpha.com/v1"
-_VIX_CACHE = {"at": 0.0, "vix": 18.0, "vix3m": None, "last_fresh_at": 0.0, "fetch_ok": False}
+_VIX_CACHE = {"at": 0.0, "vix": 18.0, "vix3m": None, "last_fresh_at": 0.0, "fetch_ok": False, "source": None}
 # Rolling VIX baseline (지수 이동 평균) — 스파이크 감지용
 _VIX_BASELINE = {"ema": None, "alpha": 0.05}
 VIX_CACHE_SEC = int(os.getenv("VIX_CACHE_SEC", "45"))
@@ -173,19 +173,73 @@ def _alpaca_bars(symbol, timeframe="5Min"):
     return df
 
 
-def _vix_fallback():
-    """Fast VIX/VIX3M via Yahoo quote API + short TTL cache.
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
 
-    Tracks fetch_ok and last_fresh_at so consumers can tell when the
-    quoted VIX is a stale fallback (e.g. yfinance failed during market
-    holidays) vs a freshly-fetched live value.
+
+def _vix_from_cboe():
+    """Primary VIX source: Cboe public CDN (no auth, no IP blocking issues).
+    Returns (vix, vix3m) tuple, with None for any leg that failed.
     """
-    now = time.time()
-    if now - _VIX_CACHE["at"] < VIX_CACHE_SEC:
-        return _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+    vix_p = None
+    vix3m_p = None
+    try:
+        r = requests.get(
+            "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX.json",
+            headers={"User-Agent": _BROWSER_UA},
+            timeout=4,
+        )
+        if r.status_code == 200:
+            px = r.json().get("data", {}).get("current_price")
+            if px is not None:
+                vix_p = float(px)
+    except Exception:
+        pass
+    try:
+        r = requests.get(
+            "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX3M.json",
+            headers={"User-Agent": _BROWSER_UA},
+            timeout=4,
+        )
+        if r.status_code == 200:
+            px = r.json().get("data", {}).get("current_price")
+            if px is not None:
+                vix3m_p = float(px)
+    except Exception:
+        pass
+    return vix_p, vix3m_p
 
-    vix_p, vix3m_p = _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
-    fetch_ok_this_call = False
+
+def _vix_from_yahoo_chart():
+    """Fallback VIX source: Yahoo chart endpoint (different from quote, less blocked)."""
+    vix_p = None
+    vix3m_p = None
+    for sym, setter in (("%5EVIX", "vix"), ("%5EVIX3M", "vix3m")):
+        try:
+            r = requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=5d",
+                headers={"User-Agent": _BROWSER_UA},
+                timeout=4,
+            )
+            if r.status_code == 200:
+                meta = r.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+                px = meta.get("regularMarketPrice")
+                if px is not None:
+                    if setter == "vix":
+                        vix_p = float(px)
+                    else:
+                        vix3m_p = float(px)
+        except Exception:
+            pass
+    return vix_p, vix3m_p
+
+
+def _vix_from_yahoo_quote():
+    """Legacy fallback: original Yahoo quote endpoint (often blocked from cloud IPs)."""
+    vix_p = None
+    vix3m_p = None
     try:
         r = requests.get(
             "https://query1.finance.yahoo.com/v7/finance/quote",
@@ -201,16 +255,49 @@ def _vix_fallback():
                     continue
                 if sym == "^VIX":
                     vix_p = float(px)
-                    fetch_ok_this_call = True
                 elif sym == "^VIX3M":
                     vix3m_p = float(px)
     except Exception:
         pass
+    return vix_p, vix3m_p
+
+
+def _vix_fallback():
+    """VIX/VIX3M via multi-source fallback chain + short TTL cache.
+
+    Source priority:
+      1. Cboe CDN — public, no auth, fastest, works from any IP
+      2. Yahoo chart endpoint — different from quote, less aggressively blocked
+      3. Yahoo quote endpoint — original (often 401/blocked from Vercel)
+
+    Cache the most recent successful value; surface vix_source so the
+    UI knows where the displayed VIX came from.
+    """
+    now = time.time()
+    if now - _VIX_CACHE["at"] < VIX_CACHE_SEC:
+        return _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+
+    vix_p, vix3m_p = _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+    source_used = None
+
+    for src_name, src_fn in (
+        ("cboe", _vix_from_cboe),
+        ("yahoo_chart", _vix_from_yahoo_chart),
+        ("yahoo_quote", _vix_from_yahoo_quote),
+    ):
+        v, v3 = src_fn()
+        if v is not None:
+            vix_p = v
+            source_used = src_name
+            if v3 is not None:
+                vix3m_p = v3
+            break  # got fresh VIX, stop trying
 
     _VIX_CACHE.update({"at": now, "vix": vix_p, "vix3m": vix3m_p})
-    if fetch_ok_this_call:
+    if source_used:
         _VIX_CACHE["last_fresh_at"] = now
         _VIX_CACHE["fetch_ok"] = True
+        _VIX_CACHE["source"] = source_used
     # else: keep prior last_fresh_at — vix value persists from last good fetch
     # Update EWMA baseline for tail-risk detection
     if vix_p is not None:
@@ -232,6 +319,7 @@ def _tail_risk_status(vix_now: float) -> dict:
     now = time.time()
     fresh_at = _VIX_CACHE.get("last_fresh_at", 0.0)
     fetch_ok = _VIX_CACHE.get("fetch_ok", False)
+    source = _VIX_CACHE.get("source")
     age_sec = (now - fresh_at) if fresh_at else None
     vix_stale = (not fetch_ok) or (age_sec is not None and age_sec > 6 * 3600)
     stale_label = "STALE — using last cached VIX" if (fetch_ok and vix_stale) \
@@ -263,6 +351,7 @@ def _tail_risk_status(vix_now: float) -> dict:
         "vix_stale": vix_stale,
         "stale_reason": stale_label,
         "vix_age_sec": int(age_sec) if age_sec else None,
+        "vix_source": source,
     }
 
 
