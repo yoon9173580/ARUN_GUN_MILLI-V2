@@ -201,6 +201,7 @@ def check_risk_rules(portfolio: dict) -> dict:
     return {
         "passed": not lockout,
         "score": score,
+        "max": 0,  # Risk is a pass/fail gate, not a score contributor (excluded from active_max sum)
         "lockout": lockout,
         "lockout_reason": lockout_reason,
         "details": details,

@@ -120,7 +120,7 @@ FUTURES_PROXIES = {
 }
 FLASHALPHA_API_KEY = os.getenv("FLASHALPHA_API_KEY", "")
 FLASHALPHA_API_URL = "https://lab.flashalpha.com/v1"
-_VIX_CACHE = {"at": 0.0, "vix": 18.0, "vix3m": None}
+_VIX_CACHE = {"at": 0.0, "vix": 18.0, "vix3m": None, "last_fresh_at": 0.0, "fetch_ok": False}
 # Rolling VIX baseline (지수 이동 평균) — 스파이크 감지용
 _VIX_BASELINE = {"ema": None, "alpha": 0.05}
 VIX_CACHE_SEC = int(os.getenv("VIX_CACHE_SEC", "45"))
@@ -174,12 +174,18 @@ def _alpaca_bars(symbol, timeframe="5Min"):
 
 
 def _vix_fallback():
-    """Fast VIX/VIX3M via Yahoo quote API + short TTL cache."""
+    """Fast VIX/VIX3M via Yahoo quote API + short TTL cache.
+
+    Tracks fetch_ok and last_fresh_at so consumers can tell when the
+    quoted VIX is a stale fallback (e.g. yfinance failed during market
+    holidays) vs a freshly-fetched live value.
+    """
     now = time.time()
     if now - _VIX_CACHE["at"] < VIX_CACHE_SEC:
         return _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
 
     vix_p, vix3m_p = _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+    fetch_ok_this_call = False
     try:
         r = requests.get(
             "https://query1.finance.yahoo.com/v7/finance/quote",
@@ -195,12 +201,17 @@ def _vix_fallback():
                     continue
                 if sym == "^VIX":
                     vix_p = float(px)
+                    fetch_ok_this_call = True
                 elif sym == "^VIX3M":
                     vix3m_p = float(px)
     except Exception:
         pass
 
     _VIX_CACHE.update({"at": now, "vix": vix_p, "vix3m": vix3m_p})
+    if fetch_ok_this_call:
+        _VIX_CACHE["last_fresh_at"] = now
+        _VIX_CACHE["fetch_ok"] = True
+    # else: keep prior last_fresh_at — vix value persists from last good fetch
     # Update EWMA baseline for tail-risk detection
     if vix_p is not None:
         if _VIX_BASELINE["ema"] is None:
@@ -212,11 +223,26 @@ def _vix_fallback():
 
 
 def _tail_risk_status(vix_now: float) -> dict:
-    """VIX 스파이크 감지 — EWMA 대비 현재 VIX 편차."""
+    """VIX 스파이크 감지 — EWMA 대비 현재 VIX 편차.
+
+    Surfaces vix_stale flag so the UI can warn when the displayed VIX
+    is the default fallback (yfinance never succeeded) or hasn't been
+    refreshed in >6h (e.g. weekend / market holiday).
+    """
+    now = time.time()
+    fresh_at = _VIX_CACHE.get("last_fresh_at", 0.0)
+    fetch_ok = _VIX_CACHE.get("fetch_ok", False)
+    age_sec = (now - fresh_at) if fresh_at else None
+    vix_stale = (not fetch_ok) or (age_sec is not None and age_sec > 6 * 3600)
+    stale_label = "STALE — using last cached VIX" if (fetch_ok and vix_stale) \
+        else ("FALLBACK — VIX fetch never succeeded, default 18.0" if not fetch_ok else None)
+
     baseline = _VIX_BASELINE["ema"]
     if vix_now is None or baseline is None or baseline <= 0:
         return {"status": "UNKNOWN", "vix": vix_now, "baseline": baseline,
-                "spike_pct": 0.0, "detail": "Insufficient VIX history"}
+                "spike_pct": 0.0, "detail": "Insufficient VIX history",
+                "vix_stale": vix_stale, "stale_reason": stale_label,
+                "vix_age_sec": int(age_sec) if age_sec else None}
     spike = (vix_now - baseline) / baseline * 100.0
     if spike >= 40:
         status, detail = "CRITICAL", f"VIX spike {spike:+.1f}% vs EWMA — panic regime"
@@ -226,17 +252,27 @@ def _tail_risk_status(vix_now: float) -> dict:
         status, detail = "ELEVATED", f"VIX {spike:+.1f}% above EWMA"
     else:
         status, detail = "NORMAL", f"VIX within {spike:+.1f}% of EWMA"
+    if vix_stale and stale_label:
+        detail = f"{detail} ({stale_label})"
     return {
         "status": status,
         "vix": round(vix_now, 2),
         "baseline": round(baseline, 2),
         "spike_pct": round(spike, 1),
         "detail": detail,
+        "vix_stale": vix_stale,
+        "stale_reason": stale_label,
+        "vix_age_sec": int(age_sec) if age_sec else None,
     }
 
 
 def _flashalpha_spy_summary():
-    """Fetch SPY summary data from FlashAlpha API (volume, VWAP, etc.)."""
+    """Fetch SPY summary data from FlashAlpha API (volume, VWAP, etc.).
+
+    Normalizes the response so the flat top-level fields (bid/ask/etc)
+    mirror the nested price.* object when only one is populated, and
+    flags the result is_stale when the update_time is more than 1 hour old.
+    """
     try:
         url = f"{FLASHALPHA_API_URL}/stock/spy/summary"
         r = requests.get(
@@ -246,19 +282,46 @@ def _flashalpha_spy_summary():
         )
         if r.status_code == 200:
             data = r.json()
+            price = data.get("price") or {}
+            # Prefer top-level if set, else fall back to nested price.*
+            bid = data.get("bid") if data.get("bid") is not None else (price.get("bid") if isinstance(price, dict) else None)
+            ask = data.get("ask") if data.get("ask") is not None else (price.get("ask") if isinstance(price, dict) else None)
+            update_time = data.get("update_time") or (price.get("last_update") if isinstance(price, dict) else None)
+            spread = data.get("spread")
+            if spread is None and bid is not None and ask is not None:
+                try:
+                    spread = round(float(ask) - float(bid), 4)
+                except Exception:
+                    spread = None
+
+            # Staleness check — STALE if no update_time or > 1h old
+            is_stale = True
+            age_sec = None
+            if update_time:
+                try:
+                    from datetime import datetime as _dt
+                    ts_str = update_time.replace("Z", "+00:00")
+                    ts = _dt.fromisoformat(ts_str)
+                    age_sec = (_dt.now(ts.tzinfo) - ts).total_seconds()
+                    is_stale = age_sec > 3600
+                except Exception:
+                    is_stale = True
+
             return {
-                "price": data.get("price"),
+                "price": price if price else data.get("price"),
                 "vwap": data.get("vwap"),
                 "open": data.get("open"),
                 "high": data.get("high"),
                 "low": data.get("low"),
                 "volume": data.get("volume"),
-                "bid": data.get("bid"),
-                "ask": data.get("ask"),
-                "spread": data.get("spread"),
-                "update_time": data.get("update_time"),
+                "bid": bid,
+                "ask": ask,
+                "spread": spread,
+                "update_time": update_time,
+                "is_stale": is_stale,
+                "age_sec": int(age_sec) if age_sec is not None else None,
             }
-    except Exception as e:
+    except Exception:
         pass
     return None
 
@@ -1897,9 +1960,9 @@ class handler(BaseHTTPRequestHandler):
                 "verdict": signal["label"], "confidence": normalized, "reason": signal["action"],
                 "rules": rules, "alert_mode": "ON SIGNAL CHANGE",
                 "indices": indices_out, "mag7": mag7_out,
-                "gme_data": gme_data, "special_watch": gme_data,
+                "gme_data": gme_data,
                 "futures_multi": futures_out,
-                "paper_trading": portfolio,
+                "paper_trading": {k: v for k, v in portfolio.items() if not k.startswith("_") and k not in ("storage_type", "revision", "last_saved")},
                 "backtest_summary": BACKTEST_SUMMARY,
                 "paper_trading_stats": paper_trading_stats,
                 "portfolio_heat": portfolio_heat,
