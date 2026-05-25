@@ -1183,7 +1183,9 @@ class handler(BaseHTTPRequestHandler):
         if INIT_ERROR:
             self.send_response(500)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            origin = self.headers.get("Origin", "")
+            self.send_header('Access-Control-Allow-Origin',
+                             origin if is_origin_allowed(origin) else 'https://hannaealgo.vercel.app')
             self.end_headers()
             self.wfile.write(f"INIT ERROR:\n{INIT_ERROR}".encode('utf-8'))
             return
@@ -1344,7 +1346,9 @@ class handler(BaseHTTPRequestHandler):
         if INIT_ERROR:
             self.send_response(500)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            origin = self.headers.get("Origin", "")
+            self.send_header('Access-Control-Allow-Origin',
+                             origin if is_origin_allowed(origin) else 'https://hannaealgo.vercel.app')
             self.end_headers()
             self.wfile.write(f"INIT ERROR:\n{INIT_ERROR}".encode('utf-8'))
             return

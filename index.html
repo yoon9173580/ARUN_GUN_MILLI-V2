@@ -2161,11 +2161,6 @@ async function loadData() {
       return;
     }
 
-    if (!r.ok) {
-      // Fallback for local/offline demo
-      r = await fetch('data.json', {cache:'no-store'});
-    }
-
     if (r.ok) {
       // Stash ETag for next conditional request.
       const etag = r.headers.get('ETag');
