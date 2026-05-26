@@ -2116,16 +2116,24 @@ class handler(BaseHTTPRequestHandler):
             # Surfaces which upstream sources are actually delivering vs
             # which are degraded/down. Lets the frontend show a status
             # indicator instead of users wondering why a card is blank.
+            # CLOSED status distinguishes "no data because market shut"
+            # from "no data because API broke" — avoids false alarms.
+            market_closed = status == "closed"
+            spy_h = bundle.get("spy_h")
+            has_bars = spy_h is not None and not spy_h.empty
             data_health = {
-                "alpaca_snapshots": "OK" if bundle.get("snaps") else "DOWN",
-                "alpaca_bars": "OK" if (bundle.get("spy_h") is not None and not bundle["spy_h"].empty) else "DOWN",
+                "alpaca_snapshots": "OK" if bundle.get("snaps") else ("CLOSED" if market_closed else "DOWN"),
+                "alpaca_bars": "OK" if has_bars else ("CLOSED" if market_closed else "DOWN"),
                 "vix": _VIX_CACHE.get("source", "UNKNOWN"),
                 "vix_fetch_ok": bool(_VIX_CACHE.get("fetch_ok", False)),
-                "flashalpha": "OK" if flashalpha_spy and not flashalpha_spy.get("is_stale") else ("STALE" if flashalpha_spy else "DOWN"),
+                "flashalpha": ("OK" if flashalpha_spy and not flashalpha_spy.get("is_stale")
+                               else ("STALE" if flashalpha_spy
+                                     else ("CLOSED" if market_closed else "DOWN"))),
                 "polygon_fallback_active": any(
                     (s or {}).get("_source") == "polygon_fallback"
                     for s in (bundle.get("snaps", {}).get("snapshots") or {}).values()
                 ),
+                "market_status": status,  # convenience — saves frontend a lookup
             }
 
             # ── ML Stats snapshot (sample count + confidence) ────────
