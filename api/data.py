@@ -41,67 +41,67 @@ MAX_OPEN_TRADES  = 1        # Max 1 MES position simultaneously
 # ── Backtest Summary (embedded static data — no file read at runtime) ─
 BACKTEST_SUMMARY = {
     "mes_futures": {
-        # v5: 원본 78 trades를 새 알고리듬 필터 (90<=score<=100, SHORT>=93,
-        # VIX<25, Macro/Roll window 차단)로 재시뮬레이션한 결과.
-        "model": "MES Futures v5 (post-fix algo filters applied)",
+        # Measured 2026-05-25 from real Databento CME Globex MDP 3.0 MES.c.0
+        # OHLCV-1m data (3 years, 1,052,817 bars) via thorough_backtest_futures.py.
+        # CORRECTED: Now uses live MES params (multiplier=$5/pt, RISK_PCT=1.5%)
+        # Prior measurement used ES params (mult=$50, risk=12%) then naively
+        # divided dollars by 10 — that produced misleading 33.9% annual / 23.7%
+        # DD. Correct rerun shows much safer and more realistic numbers.
+        "model": "MES Futures v4 (Databento real CME data, live params)",
         "period": "2023-03-25 ~ 2026-03-25",
         "period_days": 1095,
-        "strategy": "ATR SL=1.5x | Regime RR | Score 90-100 | SHORT>=93 | VIX<25 | Macro/Roll filtered | 15:00 EOD",
-        "total_trades": 51,
-        "wins": 38,
-        "losses": 13,
-        "win_rate": 74.5,
-        "profit_factor": 4.04,
-        "avg_win_mes": 25.91,
-        "avg_loss_mes": -18.74,
-        "rr_realized": 1.38,
-        "max_drawdown_pct": 4.89,
-        "annual_return_pct": 24.7,
-        "total_pnl_pct": 74.1,
-        "sharpe": 1.62,
-        "max_consecutive_losses": 2,
-        "filter_efficiency": {
-            "original_trades": 78,
-            "trades_removed": 27,
-            "trades_kept": 51,
-            "wr_uplift_pp": 7.8,
-            "pf_uplift": 1.13,
+        "strategy": "ATR SL=1.5x + Trail + BE | Risk=1.5% | NR7/Pullback/Gap/Daily bias | MIN_SCORE=88 | 10:30 entry / 15:30 EOD",
+        "total_trades": 55,
+        "wins": 33,
+        "losses": 22,
+        "win_rate": 60.0,
+        "profit_factor": 2.58,
+        "avg_win_mes": 212.48,
+        "avg_loss_mes": -123.58,
+        "rr_realized": 1.72,
+        "max_drawdown_pct": 3.6,
+        "annual_return_pct": 12.6,
+        "total_pnl_pct": 42.9,
+        "by_year": {
+            "2023_partial": {"trades": 11, "wr": 63.6, "pnl_mes":  852},
+            "2024":         {"trades": 17, "wr": 58.8, "pnl_mes": 1410},
+            "2025":         {"trades": 22, "wr": 59.1, "pnl_mes": 1986},
+            "2026_partial": {"trades": 5,  "wr": 60.0, "pnl_mes":   45}
         },
-        "vs_v3": "WR +7.8pp / PF +39% / DD ~unchanged / 27 lower-quality trades cut",
-        "note": "v5 = original v3 backtest (78건) re-simulated with new filters. 1-min CSV 재백테스트는 데이터 인제스션 대기."
-    },
-    "debit_spread_v3": {
-        "model": "SPY 0DTE Debit Spread v3 (legacy reference)",
-        "period_days": 750,
-        "total_trades": 122,
-        "win_rate": 74.6,
-        "profit_factor": 2.55,
-        "max_drawdown_pct": 21.1,
-        "total_pnl_pct": 570.0,
-        "sharpe": 5.54,
-        "note": "Legacy SPY 0DTE strategy — reference only."
+        "exit_breakdown": {"EOD": 35, "SL": 17, "BE": 3, "TRAIL": 0},
+        "status": "ACTUAL",
+        "data_source": "Databento GLBX.MDP3 MES.c.0 ohlcv-1m (real CME Globex)",
+        "vs_prior_run": "Prior 'ACTUAL' values used ES mult/12% risk then /10 rescale — produced misleading 33.9% annual / 23.7% DD. Rerun with live MES@1.5% gives realistic 12.6% / 3.6% DD.",
+        "note": "Real Databento data + live params. $10k → $14,293 in 3yr. 60% WR, 2.58 PF, 1.72 R:R. MDD 3.6% means worst drawdown was a $360 loss on $10k. Conservative but compounds: $10k → ~$14k in 3yr."
     },
     "bear_market_2022": {
-        # Synthetic stress test — extrapolated from 2022 SPY daily data
-        # using the same algo (VIX-aware, regime-RR, score 90-100, no SHORT
-        # without 93+). Real 1-min CSV for 2022 isn't yet ingested, so
-        # these numbers come from a daily-bar simulation with VIX≥25
-        # filter and counter-trend mode active most of the year.
-        "model": "MES Bear Market Stress Test (2022, daily-bar projection)",
+        # Measured 2026-05-25 from real Databento MES.c.0 ohlcv-1m, 2022
+        # full year (350,548 bars). Replaces the prior daily-bar projection.
+        # KEY FINDING: strategy went near-dormant in the 2022 bear market —
+        # only 2 entries cleared all filters (VIX dead-zone, macro gate,
+        # regime check, score >= 88). This is GOOD behavior for capital
+        # preservation — strategy stayed out rather than chasing volatile
+        # mean-reversion in a structural decline. But also shows the
+        # strategy is *too* conservative for high-VIX regimes; consider
+        # a separate counter-trend mode if you want exposure in bear markets.
+        "model": "MES Bear Market Backtest (2022 real CME data)",
         "period": "2022-01-03 ~ 2022-12-30",
         "period_days": 252,
-        "strategy": "VIX-25 filter + counter-trend mode for high VIX",
-        "total_trades": 18,           # most days filtered out by VIX>25
-        "wins": 11,
-        "losses": 7,
-        "win_rate": 61.1,
-        "profit_factor": 1.74,
-        "max_drawdown_pct": 8.2,
-        "annual_return_pct": 11.4,
-        "total_pnl_pct": 11.4,
+        "strategy": "ATR SL=1.5x + Trail + BE | Risk=1.5% | Same filters as live (no special bear mode)",
+        "total_trades": 2,
+        "wins": 1,
+        "losses": 1,
+        "win_rate": 50.0,
+        "profit_factor": 1.25,
+        "avg_win_mes": 164.50,
+        "avg_loss_mes": -132.00,
+        "max_drawdown_pct": 1.3,
+        "annual_return_pct": 0.3,
+        "total_pnl_pct": 0.3,
         "vix_avg": 25.8,
-        "note": "PROJECTION — daily-bar approximation. 1-min CSV backtest pending data ingestion. VIX>25 filter cut trade count by ~70% vs 2023-2026 sample.",
-        "status": "PROJECTION",
+        "note": "ACTUAL — Databento real 1-min data. Strategy filters blocked entry on 306/308 trading days (VIX dead-zone + macro gates). Result: capital preservation (+0.3%) but no alpha capture during bear market. Verdict: defensive design works as intended.",
+        "status": "ACTUAL",
+        "data_source": "Databento GLBX.MDP3 MES.c.0 ohlcv-1m (real CME Globex 2022)",
     }
 }
 
@@ -130,7 +130,7 @@ FUTURES_PROXIES = {
 }
 FLASHALPHA_API_KEY = os.getenv("FLASHALPHA_API_KEY", "")
 FLASHALPHA_API_URL = "https://lab.flashalpha.com/v1"
-_VIX_CACHE = {"at": 0.0, "vix": 18.0, "vix3m": None}
+_VIX_CACHE = {"at": 0.0, "vix": 18.0, "vix3m": None, "last_fresh_at": 0.0, "fetch_ok": False, "source": None}
 # Rolling VIX baseline (지수 이동 평균) — 스파이크 감지용.
 # Persists across Vercel cold starts via local /tmp file (best-effort);
 # Upstash KV would be more reliable but adds a remote call per request.
@@ -182,12 +182,73 @@ class SafeEncoder(json.JSONEncoder):
 # ── Alpaca Data Fetchers ────────────────────────────────────────────
 
 def _alpaca_snapshots(symbols):
-    """Fetch latest snapshots for multiple stock symbols."""
+    """Fetch latest snapshots for multiple stock symbols.
+
+    Falls back to Polygon grouped daily aggs (1 request, free-tier safe)
+    if Alpaca is unreachable or returns an HTTP error. This protects the
+    indices/mag7 grid from going totally blank when one upstream is down.
+    """
     url = f"{ALPACA_DATA_URL}/v2/stocks/snapshots"
-    r = requests.get(url, headers=ALPACA_HEADERS,
-                     params={"symbols": ",".join(symbols), "feed": "iex"}, timeout=5)
-    r.raise_for_status()
-    return r.json()
+    try:
+        r = requests.get(url, headers=ALPACA_HEADERS,
+                         params={"symbols": ",".join(symbols), "feed": "iex"}, timeout=5)
+        r.raise_for_status()
+        return r.json()
+    except Exception as e:
+        print(f"[Alpaca Snapshots] Failed, trying Polygon fallback: {e}")
+        fb = _polygon_snapshots_fallback(symbols)
+        if fb:
+            return fb
+        raise  # both upstreams failed — let caller handle
+
+
+def _polygon_snapshots_fallback(symbols):
+    """Polygon grouped daily aggs fallback when Alpaca is down.
+
+    Uses /v2/aggs/grouped/locale/us/market/stocks/{date} — a single
+    request that returns OHLC for all US stocks. Free-tier-friendly
+    (1 req vs 12 individual snapshot calls).
+
+    Returns an Alpaca-shaped dict so callers don't need to branch on
+    source. Prev-day close becomes both `latestTrade.p` (current proxy)
+    AND `prevDailyBar.c`, so pct change shows 0% — better than missing
+    data, and is clearly labeled stale by the caller's flashalpha logic.
+    """
+    api_key = os.getenv("POLYGON_API_KEY", "")
+    if not api_key:
+        return None
+    # Use yesterday's date — today won't have grouped data until after close
+    now = datetime.now(NY)
+    yesterday = (now - timedelta(days=1)).strftime("%Y-%m-%d")
+    url = f"https://api.polygon.io/v2/aggs/grouped/locale/us/market/stocks/{yesterday}"
+    try:
+        r = requests.get(url, params={"apiKey": api_key, "adjusted": "true"}, timeout=8)
+        if r.status_code != 200:
+            print(f"[Polygon Fallback] HTTP {r.status_code}: {r.text[:120]}")
+            return None
+        data = r.json().get("results") or []
+        wanted = set(symbols)
+        out = {"snapshots": {}}
+        for row in data:
+            sym = row.get("T")
+            if sym not in wanted:
+                continue
+            close = row.get("c")
+            open_ = row.get("o", close)
+            if close is None:
+                continue
+            out["snapshots"][sym] = {
+                "latestTrade": {"p": close},
+                "prevDailyBar": {"c": open_},  # use day-open as prev for some pct signal
+                "dailyBar": {"o": open_, "h": row.get("h", close), "l": row.get("l", close), "c": close, "v": row.get("v", 0)},
+                "_source": "polygon_fallback",
+            }
+        if out["snapshots"]:
+            print(f"[Polygon Fallback] OK — {len(out['snapshots'])}/{len(wanted)} symbols")
+            return out
+    except Exception as e:
+        print(f"[Polygon Fallback Error] {e}")
+    return None
 
 
 def _alpaca_bars(symbol, timeframe="5Min"):
@@ -211,13 +272,73 @@ def _alpaca_bars(symbol, timeframe="5Min"):
     return df
 
 
-def _vix_fallback():
-    """Fast VIX/VIX3M via Yahoo quote API + short TTL cache."""
-    now = time.time()
-    if now - _VIX_CACHE["at"] < VIX_CACHE_SEC:
-        return _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+_BROWSER_UA = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+)
 
-    vix_p, vix3m_p = _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+
+def _vix_from_cboe():
+    """Primary VIX source: Cboe public CDN (no auth, no IP blocking issues).
+    Returns (vix, vix3m) tuple, with None for any leg that failed.
+    """
+    vix_p = None
+    vix3m_p = None
+    try:
+        r = requests.get(
+            "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX.json",
+            headers={"User-Agent": _BROWSER_UA},
+            timeout=4,
+        )
+        if r.status_code == 200:
+            px = r.json().get("data", {}).get("current_price")
+            if px is not None:
+                vix_p = float(px)
+    except Exception:
+        pass
+    try:
+        r = requests.get(
+            "https://cdn.cboe.com/api/global/delayed_quotes/quotes/_VIX3M.json",
+            headers={"User-Agent": _BROWSER_UA},
+            timeout=4,
+        )
+        if r.status_code == 200:
+            px = r.json().get("data", {}).get("current_price")
+            if px is not None:
+                vix3m_p = float(px)
+    except Exception:
+        pass
+    return vix_p, vix3m_p
+
+
+def _vix_from_yahoo_chart():
+    """Fallback VIX source: Yahoo chart endpoint (different from quote, less blocked)."""
+    vix_p = None
+    vix3m_p = None
+    for sym, setter in (("%5EVIX", "vix"), ("%5EVIX3M", "vix3m")):
+        try:
+            r = requests.get(
+                f"https://query1.finance.yahoo.com/v8/finance/chart/{sym}?interval=1d&range=5d",
+                headers={"User-Agent": _BROWSER_UA},
+                timeout=4,
+            )
+            if r.status_code == 200:
+                meta = r.json().get("chart", {}).get("result", [{}])[0].get("meta", {})
+                px = meta.get("regularMarketPrice")
+                if px is not None:
+                    if setter == "vix":
+                        vix_p = float(px)
+                    else:
+                        vix3m_p = float(px)
+        except Exception:
+            pass
+    return vix_p, vix3m_p
+
+
+def _vix_from_yahoo_quote():
+    """Legacy fallback: original Yahoo quote endpoint (often blocked from cloud IPs)."""
+    vix_p = None
+    vix3m_p = None
     try:
         r = requests.get(
             "https://query1.finance.yahoo.com/v7/finance/quote",
@@ -237,8 +358,46 @@ def _vix_fallback():
                     vix3m_p = float(px)
     except Exception:
         pass
+    return vix_p, vix3m_p
+
+
+def _vix_fallback():
+    """VIX/VIX3M via multi-source fallback chain + short TTL cache.
+
+    Source priority:
+      1. Cboe CDN — public, no auth, fastest, works from any IP
+      2. Yahoo chart endpoint — different from quote, less aggressively blocked
+      3. Yahoo quote endpoint — original (often 401/blocked from Vercel)
+
+    Cache the most recent successful value; surface vix_source so the
+    UI knows where the displayed VIX came from.
+    """
+    now = time.time()
+    if now - _VIX_CACHE["at"] < VIX_CACHE_SEC:
+        return _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+
+    vix_p, vix3m_p = _VIX_CACHE["vix"], _VIX_CACHE["vix3m"]
+    source_used = None
+
+    for src_name, src_fn in (
+        ("cboe", _vix_from_cboe),
+        ("yahoo_chart", _vix_from_yahoo_chart),
+        ("yahoo_quote", _vix_from_yahoo_quote),
+    ):
+        v, v3 = src_fn()
+        if v is not None:
+            vix_p = v
+            source_used = src_name
+            if v3 is not None:
+                vix3m_p = v3
+            break  # got fresh VIX, stop trying
 
     _VIX_CACHE.update({"at": now, "vix": vix_p, "vix3m": vix3m_p})
+    if source_used:
+        _VIX_CACHE["last_fresh_at"] = now
+        _VIX_CACHE["fetch_ok"] = True
+        _VIX_CACHE["source"] = source_used
+    # else: keep prior last_fresh_at — vix value persists from last good fetch
     # Update EWMA baseline for tail-risk detection (persists across cold starts)
     if vix_p is not None:
         if _VIX_BASELINE["ema"] is None:
@@ -251,11 +410,27 @@ def _vix_fallback():
 
 
 def _tail_risk_status(vix_now: float) -> dict:
-    """VIX 스파이크 감지 — EWMA 대비 현재 VIX 편차."""
+    """VIX 스파이크 감지 — EWMA 대비 현재 VIX 편차.
+
+    Surfaces vix_stale flag so the UI can warn when the displayed VIX
+    is the default fallback (yfinance never succeeded) or hasn't been
+    refreshed in >6h (e.g. weekend / market holiday).
+    """
+    now = time.time()
+    fresh_at = _VIX_CACHE.get("last_fresh_at", 0.0)
+    fetch_ok = _VIX_CACHE.get("fetch_ok", False)
+    source = _VIX_CACHE.get("source")
+    age_sec = (now - fresh_at) if fresh_at else None
+    vix_stale = (not fetch_ok) or (age_sec is not None and age_sec > 6 * 3600)
+    stale_label = "STALE — using last cached VIX" if (fetch_ok and vix_stale) \
+        else ("FALLBACK — VIX fetch never succeeded, default 18.0" if not fetch_ok else None)
+
     baseline = _VIX_BASELINE["ema"]
     if vix_now is None or baseline is None or baseline <= 0:
         return {"status": "UNKNOWN", "vix": vix_now, "baseline": baseline,
-                "spike_pct": 0.0, "detail": "Insufficient VIX history"}
+                "spike_pct": 0.0, "detail": "Insufficient VIX history",
+                "vix_stale": vix_stale, "stale_reason": stale_label,
+                "vix_age_sec": int(age_sec) if age_sec else None}
     spike = (vix_now - baseline) / baseline * 100.0
     if spike >= 40:
         status, detail = "CRITICAL", f"VIX spike {spike:+.1f}% vs EWMA — panic regime"
@@ -265,17 +440,28 @@ def _tail_risk_status(vix_now: float) -> dict:
         status, detail = "ELEVATED", f"VIX {spike:+.1f}% above EWMA"
     else:
         status, detail = "NORMAL", f"VIX within {spike:+.1f}% of EWMA"
+    if vix_stale and stale_label:
+        detail = f"{detail} ({stale_label})"
     return {
         "status": status,
         "vix": round(vix_now, 2),
         "baseline": round(baseline, 2),
         "spike_pct": round(spike, 1),
         "detail": detail,
+        "vix_stale": vix_stale,
+        "stale_reason": stale_label,
+        "vix_age_sec": int(age_sec) if age_sec else None,
+        "vix_source": source,
     }
 
 
 def _flashalpha_spy_summary():
-    """Fetch SPY summary data from FlashAlpha API (volume, VWAP, etc.)."""
+    """Fetch SPY summary data from FlashAlpha API (volume, VWAP, etc.).
+
+    Normalizes the response so the flat top-level fields (bid/ask/etc)
+    mirror the nested price.* object when only one is populated, and
+    flags the result is_stale when the update_time is more than 1 hour old.
+    """
     try:
         url = f"{FLASHALPHA_API_URL}/stock/spy/summary"
         r = requests.get(
@@ -285,21 +471,95 @@ def _flashalpha_spy_summary():
         )
         if r.status_code == 200:
             data = r.json()
+            price = data.get("price") or {}
+            # Prefer top-level if set, else fall back to nested price.*
+            bid = data.get("bid") if data.get("bid") is not None else (price.get("bid") if isinstance(price, dict) else None)
+            ask = data.get("ask") if data.get("ask") is not None else (price.get("ask") if isinstance(price, dict) else None)
+            update_time = data.get("update_time") or (price.get("last_update") if isinstance(price, dict) else None)
+            spread = data.get("spread")
+            if spread is None and bid is not None and ask is not None:
+                try:
+                    spread = round(float(ask) - float(bid), 4)
+                except Exception:
+                    spread = None
+
+            # Staleness check — STALE if no update_time or > 1h old
+            is_stale = True
+            age_sec = None
+            if update_time:
+                try:
+                    from datetime import datetime as _dt
+                    ts_str = update_time.replace("Z", "+00:00")
+                    ts = _dt.fromisoformat(ts_str)
+                    age_sec = (_dt.now(ts.tzinfo) - ts).total_seconds()
+                    is_stale = age_sec > 3600
+                except Exception:
+                    is_stale = True
+
             return {
-                "price": data.get("price"),
+                "price": price if price else data.get("price"),
                 "vwap": data.get("vwap"),
                 "open": data.get("open"),
                 "high": data.get("high"),
                 "low": data.get("low"),
                 "volume": data.get("volume"),
-                "bid": data.get("bid"),
-                "ask": data.get("ask"),
-                "spread": data.get("spread"),
-                "update_time": data.get("update_time"),
+                "bid": bid,
+                "ask": ask,
+                "spread": spread,
+                "update_time": update_time,
+                "is_stale": is_stale,
+                "age_sec": int(age_sec) if age_sec is not None else None,
             }
-    except Exception as e:
+    except Exception:
         pass
     return None
+
+
+# ── NYSE Holiday Calendar (single source of truth) ──────────────
+# Maps date → human-readable holiday name. Used by get_market_status
+# AND surfaced to frontend so users see "Memorial Day" instead of just
+# "market closed" with no explanation.
+NYSE_HOLIDAYS = {
+    # 2026
+    datetime(2026, 1, 1).date():   "New Year's Day",
+    datetime(2026, 1, 19).date():  "MLK Day",
+    datetime(2026, 2, 16).date():  "Presidents' Day",
+    datetime(2026, 4, 3).date():   "Good Friday",
+    datetime(2026, 5, 25).date():  "Memorial Day",
+    datetime(2026, 6, 19).date():  "Juneteenth",
+    datetime(2026, 7, 3).date():   "Independence Day (observed)",
+    datetime(2026, 9, 7).date():   "Labor Day",
+    datetime(2026, 11, 26).date(): "Thanksgiving",
+    datetime(2026, 12, 25).date(): "Christmas",
+    # 2027 (forward-loaded so dashboard doesn't go silent at year boundary)
+    datetime(2027, 1, 1).date():   "New Year's Day",
+    datetime(2027, 1, 18).date():  "MLK Day",
+    datetime(2027, 2, 15).date():  "Presidents' Day",
+    datetime(2027, 3, 26).date():  "Good Friday",
+    datetime(2027, 5, 31).date():  "Memorial Day",
+    datetime(2027, 6, 18).date():  "Juneteenth (observed)",
+    datetime(2027, 7, 5).date():   "Independence Day (observed)",
+    datetime(2027, 9, 6).date():   "Labor Day",
+    datetime(2027, 11, 25).date(): "Thanksgiving",
+    datetime(2027, 12, 24).date(): "Christmas (observed)",
+}
+
+
+def get_holiday_info(dt):
+    """
+    Returns {is_holiday: bool, name: str|None, is_weekend: bool} for the given date.
+
+    Used by the API to surface a banner on the dashboard so users don't
+    wonder "why are all values zero" on closed days.
+    """
+    is_weekend = dt.weekday() >= 5
+    holiday_name = NYSE_HOLIDAYS.get(dt.date())
+    return {
+        "is_holiday": holiday_name is not None,
+        "name": holiday_name,
+        "is_weekend": is_weekend,
+        "is_closed_day": is_weekend or holiday_name is not None,
+    }
 
 
 def get_market_status(dt):
@@ -318,20 +578,8 @@ def get_market_status(dt):
     if dt.weekday() >= 5:
         return 'closed'
 
-    # 2. NYSE holidays 2026
-    nyse_holidays_2026 = {
-        datetime(2026, 1, 1).date(),
-        datetime(2026, 1, 19).date(),
-        datetime(2026, 2, 16).date(),
-        datetime(2026, 4, 3).date(),
-        datetime(2026, 5, 25).date(),
-        datetime(2026, 6, 19).date(),
-        datetime(2026, 7, 3).date(),
-        datetime(2026, 9, 7).date(),
-        datetime(2026, 11, 26).date(),
-        datetime(2026, 12, 25).date(),
-    }
-    if dt.date() in nyse_holidays_2026:
+    # 2. NYSE holidays (single source — NYSE_HOLIDAYS map)
+    if dt.date() in NYSE_HOLIDAYS:
         return 'closed'
 
     t_min = dt.hour * 60 + dt.minute
@@ -1197,6 +1445,7 @@ from lib.auth import (
     is_origin_allowed,
     verify_google_token as _verify_google_token,
     check_rate_limit as _check_rate_limit_impl,
+    auth_bypass_enabled,
 )
 
 
@@ -1223,7 +1472,9 @@ class handler(BaseHTTPRequestHandler):
         if INIT_ERROR:
             self.send_response(500)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            origin = self.headers.get("Origin", "")
+            self.send_header('Access-Control-Allow-Origin',
+                             origin if is_origin_allowed(origin) else 'https://hannaealgo.vercel.app')
             self.end_headers()
             self.wfile.write(f"INIT ERROR:\n{INIT_ERROR}".encode('utf-8'))
             return
@@ -1331,7 +1582,7 @@ class handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin", "")
         # Auth check (cookie required for streaming too)
         cookie_header = self.headers.get("Cookie", "")
-        if "access_token=valid" not in cookie_header:
+        if "access_token=valid" not in cookie_header and not auth_bypass_enabled():
             self.send_response(401)
             self.send_header('Content-Type', 'application/json')
             self.send_header('Access-Control-Allow-Origin', origin if is_origin_allowed(origin) else 'https://hannaealgo.vercel.app')
@@ -1384,7 +1635,9 @@ class handler(BaseHTTPRequestHandler):
         if INIT_ERROR:
             self.send_response(500)
             self.send_header('Content-Type', 'text/plain; charset=utf-8')
-            self.send_header('Access-Control-Allow-Origin', '*')
+            origin = self.headers.get("Origin", "")
+            self.send_header('Access-Control-Allow-Origin',
+                             origin if is_origin_allowed(origin) else 'https://hannaealgo.vercel.app')
             self.end_headers()
             self.wfile.write(f"INIT ERROR:\n{INIT_ERROR}".encode('utf-8'))
             return
@@ -1409,10 +1662,11 @@ class handler(BaseHTTPRequestHandler):
             return
 
         # API Authentication — Google SSO cookie ONLY (legacy unlock key removed)
+        # TEMPORARY: AUTH_BYPASS=1 env var disables this gate for auditing.
         cookie_header = self.headers.get("Cookie", "")
         has_cookie = "access_token=valid" in cookie_header
 
-        is_authed = has_cookie
+        is_authed = has_cookie or auth_bypass_enabled()
         if not is_authed:
                 origin = self.headers.get("Origin", "")
                 self.send_response(401)
@@ -1807,24 +2061,11 @@ class handler(BaseHTTPRequestHandler):
             start_dt = datetime.strptime(TRADING_START_DATE, "%Y-%m-%d").date()
             today_dt = now.date()
             calendar_day = max(1, (today_dt - start_dt).days + 1)
-            # NYSE holidays 2026
-            nyse_holidays_2026 = {
-                datetime(2026,1,1).date(),    # New Year's Day
-                datetime(2026,1,19).date(),   # MLK Day
-                datetime(2026,2,16).date(),   # Presidents' Day
-                datetime(2026,4,3).date(),    # Good Friday
-                datetime(2026,5,25).date(),   # Memorial Day
-                datetime(2026,6,19).date(),   # Juneteenth
-                datetime(2026,7,3).date(),    # Independence Day (observed)
-                datetime(2026,9,7).date(),    # Labor Day
-                datetime(2026,11,26).date(),  # Thanksgiving
-                datetime(2026,12,25).date(),  # Christmas
-            }
-            # Trading day = weekdays (Mon-Fri) minus NYSE holidays
+            # Trading day = weekdays (Mon-Fri) minus NYSE_HOLIDAYS
             trading_day_count = 0
             d = start_dt
             while d <= today_dt:
-                if d.weekday() < 5 and d not in nyse_holidays_2026:
+                if d.weekday() < 5 and d not in NYSE_HOLIDAYS:
                     trading_day_count += 1
                 d += timedelta(days=1)
             trading_day = max(1, trading_day_count)
@@ -1900,6 +2141,37 @@ class handler(BaseHTTPRequestHandler):
                 "limit_pct": 5.0,
             }
 
+            # ── Data Health snapshot ─────────────────────────────────
+            # Surfaces which upstream sources are actually delivering vs
+            # which are degraded/down. Lets the frontend show a status
+            # indicator instead of users wondering why a card is blank.
+            # CLOSED status distinguishes "no data because market shut"
+            # from "no data because API broke" — avoids false alarms.
+            market_closed = status == "closed"
+            spy_h = bundle.get("spy_h")
+            has_bars = spy_h is not None and not spy_h.empty
+            data_health = {
+                "alpaca_snapshots": "OK" if bundle.get("snaps") else ("CLOSED" if market_closed else "DOWN"),
+                "alpaca_bars": "OK" if has_bars else ("CLOSED" if market_closed else "DOWN"),
+                "vix": _VIX_CACHE.get("source", "UNKNOWN"),
+                "vix_fetch_ok": bool(_VIX_CACHE.get("fetch_ok", False)),
+                "flashalpha": ("OK" if flashalpha_spy and not flashalpha_spy.get("is_stale")
+                               else ("STALE" if flashalpha_spy
+                                     else ("CLOSED" if market_closed else "DOWN"))),
+                "polygon_fallback_active": any(
+                    (s or {}).get("_source") == "polygon_fallback"
+                    for s in (bundle.get("snaps", {}).get("snapshots") or {}).values()
+                ),
+                "market_status": status,  # convenience — saves frontend a lookup
+            }
+
+            # ── ML Stats snapshot (sample count + confidence) ────────
+            try:
+                from engines.ml_weights import get_ml_stats
+                ml_stats = get_ml_stats()
+            except Exception as e:
+                ml_stats = {"error": str(e)[:120], "confidence": "ERROR"}
+
             # Adaptive next-poll hint — frontend uses this instead of a
             # hardcoded 10s interval. Vercel Python serverless can't hold a
             # WebSocket, so we lean on shorter polls during active windows
@@ -1923,6 +2195,7 @@ class handler(BaseHTTPRequestHandler):
                 "flashalpha": flashalpha_spy,
                 "session": "REGULAR" if is_regular else "CLOSED",
                 "market_status": status,                    # NEW: regular / pre_market / after_hours / closed
+                "holiday_info": get_holiday_info(now),       # NEW: {is_holiday, name, is_weekend, is_closed_day}
                 "trading_day": trading_day,
                 "calendar_day": calendar_day,
                 "trading_start_date": TRADING_START_DATE,
@@ -1934,9 +2207,9 @@ class handler(BaseHTTPRequestHandler):
                 "verdict": signal["label"], "confidence": normalized, "reason": signal["action"],
                 "rules": rules, "alert_mode": "ON SIGNAL CHANGE",
                 "indices": indices_out, "mag7": mag7_out,
-                "gme_data": gme_data, "special_watch": gme_data,
+                "gme_data": gme_data,
                 "futures_multi": futures_out,
-                "paper_trading": portfolio,
+                "paper_trading": {k: v for k, v in portfolio.items() if not k.startswith("_") and k not in ("storage_type", "revision", "last_saved")},
                 "backtest_summary": BACKTEST_SUMMARY,
                 "paper_trading_stats": paper_trading_stats,
                 "portfolio_heat": portfolio_heat,
@@ -1960,6 +2233,8 @@ class handler(BaseHTTPRequestHandler):
                 },
                 "daily_halt": daily_dd_pct >= DAILY_LOSS_LIMIT * 100,
                 "daily_drawdown_pct": round(daily_dd_pct, 2),
+                "data_health": data_health,
+                "ml_stats": ml_stats,
             }
 
             # ETag from signal-relevant subset (so unchanged signals don't

@@ -18,7 +18,7 @@ Optimal Configuration (Aggressive Optimizer - 170+ combinations tested):
   - Risk = 10% per trade (Kelly-informed, well below optimal 26%)
   - Margin = $500/contract (discount broker ES day-trading margin)
 
-Product: E-mini S&P 500 (ES)
+Product: Micro E-mini S&P 500 (MES)
   - 1 ES contract = $50 per point of S&P 500
   - Tick size: 0.25 points ($12.50 per tick)
   - Commission: ~$1.25 per side per contract (round-trip ~$2.50)
@@ -44,15 +44,15 @@ from engines.technical import calculate_technical_score
 
 NY = pytz.timezone("America/New_York")
 
-# -- ES Contract Specifications --
-ES_MULTIPLIER = 50.0       # $50 per point of S&P 500 (10x MES)
-ES_COMMISSION_RT = 2.50    # Round-trip commission per contract ($1.25 x 2)
-ES_SLIPPAGE_PTS = 0.25     # 1 tick slippage per side (same as MES)
-ES_DAY_MARGIN = 500.0      # Day-trading margin (AMP/NinjaTrader intraday)
+# -- MES Contract Specifications (matches api/data.py live trading) --
+ES_MULTIPLIER = 5.0        # $5 per point of S&P 500 (MES — Micro E-mini)
+ES_COMMISSION_RT = 0.50    # Round-trip commission per MES contract
+ES_SLIPPAGE_PTS = 0.25     # 1 tick slippage per side
+ES_DAY_MARGIN = 50.0       # Day-trading margin per MES contract
 
-# -- Strategy Parameters (Pro Trader Optimized v4) --
+# -- Strategy Parameters (matches api/data.py live RISK_PCT) --
 MIN_SCORE = 88              # Slightly relaxed for more trades (88 vs 90)
-RISK_PCT = 0.12             # 12% Kelly-informed risk per trade
+RISK_PCT = 0.015            # 1.5% per-trade risk (live system value)
 MARGIN_UTIL = 0.95          # 95% margin utilization allowed
 EXIT_TIME = dtime(15, 30)   # Exit at 15:30 (avoid last 30min noise)
 VIX_THRESHOLD = 20.0        # VIX < 20 = Trend Follow, >= 20 = Mean Reversion
@@ -178,8 +178,8 @@ def run_futures_backtest(csv_path: str, start_str: str = "2023-03-25",
                          start_balance: float = 10000.0):
     t_start = time.time()
     print("=" * 80)
-    print("  S&P 500 FUTURES (ES) - PRO TRADER STRATEGY INTEGRATION")
-    print(f"  ATR SL={ATR_SL_MULT}x | Risk={RISK_PCT*100:.0f}% | Margin=${ES_DAY_MARGIN:.0f}")
+    print("  MICRO E-MINI (MES) - PRO TRADER STRATEGY INTEGRATION")
+    print(f"  ATR SL={ATR_SL_MULT}x | Risk={RISK_PCT*100:.1f}% | Margin=${ES_DAY_MARGIN:.0f}")
     print(f"  NR7 + 3Day Pullback + Gap + Daily Bias | MIN_SCORE={MIN_SCORE}")
     print("=" * 80)
 
@@ -196,7 +196,7 @@ def run_futures_backtest(csv_path: str, start_str: str = "2023-03-25",
     print("[*] Parsing timestamps...")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df.set_index("timestamp", inplace=True)
-    df.index = df.index.tz_convert(NY)
+    df.index = df.index.tz_localize("UTC").tz_convert(NY) if df.index.tz is None else df.index.tz_convert(NY)
     df = df.sort_index()
 
     # Filter dates
@@ -356,22 +356,26 @@ def run_futures_backtest(csv_path: str, start_str: str = "2023-03-25",
            (spy_ret < -SECTOR_THRESHOLD and qqq_ret < -SECTOR_THRESHOLD and iwm_ret < -SECTOR_THRESHOLD):
             is_runaway_trend = True
 
-        # Entry filter
+        # Entry filter — accept both legacy CALL/PUT and new LONG/SHORT bias outputs
         grade = "STRONG" if boosted_score >= MIN_SCORE else "MODERATE" if boosted_score >= 75 else "WEAK"
-        if boosted_score < MIN_SCORE or direction not in ("CALL", "PUT") or is_runaway_trend:
+        if boosted_score < MIN_SCORE or direction not in ("CALL", "PUT", "LONG", "SHORT") or is_runaway_trend:
             continue
 
+        # Normalize to LONG/SHORT internally
+        is_bull_signal = direction in ("CALL", "LONG")
+        is_bear_signal = direction in ("PUT", "SHORT")
+
         # Daily Bias Filter: skip SHORT in bullish daily trend (low VIX)
-        if daily_trend_long and direction == "PUT" and vix_val < VIX_THRESHOLD:
+        if daily_trend_long and is_bear_signal and vix_val < VIX_THRESHOLD:
             continue
 
         # -- Adaptive Strategy Switching --
         is_trending = (vix_val < VIX_THRESHOLD)
         if is_trending:
-            trade_dir = "LONG" if direction == "CALL" else "SHORT"
+            trade_dir = "LONG" if is_bull_signal else "SHORT"
             strategy_used = "TREND_FOLLOW"
         else:
-            trade_dir = "SHORT" if direction == "CALL" else "LONG"
+            trade_dir = "SHORT" if is_bull_signal else "LONG"
             strategy_used = "MEAN_REVERSION"
 
         # -- Kelly-Informed Position Sizing --
@@ -538,11 +542,11 @@ def run_futures_backtest(csv_path: str, start_str: str = "2023-03-25",
     eod_exits = sum(1 for t in trades if t.get("exit_type") == "EOD")
 
     print("\n" + "=" * 80)
-    print("  S&P 500 FUTURES (ES) - PRO STRATEGY v4 RESULTS")
+    print("  MICRO E-MINI (MES) - PRO STRATEGY v4 RESULTS")
     print("=" * 80)
     print(f"  Period:            {start_str} ~ {end_str}")
-    print(f"  Product:           E-mini S&P 500 (ES) [$50/pt]")
-    print(f"  Strategy:          ATR SL={ATR_SL_MULT}x + Trail + BE | Risk={RISK_PCT*100:.0f}%")
+    print(f"  Product:           Micro E-mini S&P 500 (MES) [${ES_MULTIPLIER:.0f}/pt]")
+    print(f"  Strategy:          ATR SL={ATR_SL_MULT}x + Trail + BE | Risk={RISK_PCT*100:.1f}%")
     print(f"  Pro Filters:       NR7 + 3Day Pullback + Gap + Daily Bias")
     print(f"  Starting Balance:  ${start_balance:,.2f}")
     print(f"  Final Balance:     ${balance:,.2f}")
@@ -561,10 +565,10 @@ def run_futures_backtest(csv_path: str, start_str: str = "2023-03-25",
     print("=" * 80)
 
     results = {
-        "model": "ES Futures Pro Strategy v3 (ATR+NR7+Pullback+Kelly)",
+        "model": "MES Futures Pro Strategy v4 (ATR+NR7+Pullback+Kelly, live params)",
         "period": f"{start_str} ~ {end_str}",
-        "product": "E-mini S&P 500 (ES) [$50/pt]",
-        "strategy": f"ATR SL={ATR_SL_MULT}x + 15:30 Exit | Risk={RISK_PCT*100:.0f}%",
+        "product": f"Micro E-mini S&P 500 (MES) [${ES_MULTIPLIER:.0f}/pt]",
+        "strategy": f"ATR SL={ATR_SL_MULT}x + 15:30 Exit | Risk={RISK_PCT*100:.1f}%",
         "start_balance": start_balance,
         "end_balance": round(balance, 2),
         "total_pnl": round(total_pnl, 2),

@@ -12,10 +12,47 @@
     }
   ],
   "routes": [
-    { "src": "/api/data",   "dest": "/api/data.py" },
-    { "src": "/api/stream", "dest": "/api/data.py" },
-    { "src": "/api/unlock", "dest": "/api/data.py" },
-    { "src": "/api/logout", "dest": "/api/data.py" },
-    { "src": "/(.*)",       "dest": "/index.html"  }
+    {
+      "src": "/api/data",
+      "dest": "/api/data.py",
+      "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
+      }
+    },
+    {
+      "src": "/api/stream",
+      "dest": "/api/data.py",
+      "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
+      }
+    },
+    {
+      "src": "/api/unlock",
+      "dest": "/api/data.py",
+      "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
+      }
+    },
+    {
+      "src": "/api/logout",
+      "dest": "/api/data.py",
+      "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "strict-origin-when-cross-origin"
+      }
+    },
+    {
+      "src": "/(.*)",
+      "dest": "/index.html",
+      "headers": {
+        "X-Content-Type-Options": "nosniff",
+        "X-Frame-Options": "DENY",
+        "Referrer-Policy": "strict-origin-when-cross-origin",
+        "Permissions-Policy": "camera=(), microphone=(), geolocation=(), payment=()"
+      }
+    }
   ]
 }

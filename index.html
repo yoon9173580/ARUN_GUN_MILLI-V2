@@ -487,6 +487,9 @@ body::before{content:'';position:fixed;top:-50%;left:-50%;width:200%;height:200%
     </div>
   </div>
 
+  <!-- Holiday / Weekend Banner (rendered when market is closed for a known reason) -->
+  <div id="holidayBanner" style="display:none;border-radius:10px;padding:10px 16px;margin-bottom:1rem;font-size:0.85rem;font-weight:600;text-align:center;background:linear-gradient(135deg,#1a1a2e,#2a1f3e);border:1px solid rgba(167,139,250,0.25);color:var(--purple)"></div>
+
   <!-- Briefing -->
   <div class="briefing-bar" id="briefing">Connecting to signal engine...</div>
   <div id="macroBanner" style="display:none;border-radius:10px;padding:8px 14px;margin-bottom:1rem;font-size:0.78rem;font-weight:600;text-align:center"></div>
@@ -681,21 +684,24 @@ function colorToRgba(color, alpha) {
 }
 
 function renderLayerBars(layers) {
+  // Fallback maxes (used only if API didn't include layer.max).
+  // Authoritative values come from each engine in api/engines/*.py.
   const defs = [
-    {key:'regime', name:'Regime', max:40},
-    {key:'options_flow', name:'Opt Flow', max:30},
-    {key:'correlation', name:'Correlat.', max:20},
-    {key:'time_window', name:'Time Win', max:20},
-    {key:'technical', name:'Technical', max:30},
+    {key:'regime', name:'Regime', fallbackMax:50},
+    {key:'options_flow', name:'Opt Flow', fallbackMax:30},
+    {key:'correlation', name:'Correlat.', fallbackMax:20},
+    {key:'time_window', name:'Time Win', fallbackMax:20},
+    {key:'technical', name:'Technical', fallbackMax:30},
   ];
   const el = document.getElementById('layerBars');
   el.innerHTML = defs.map(d => {
     const l = layers?.[d.key];
     const score = l?.score ?? 0;
+    const max = l?.max ?? d.fallbackMax;  // prefer API value over hardcoded fallback
     const noData = d.key === 'options_flow' && l?.status === 'NO_DATA';
-    const pct = Math.max(0, Math.min(100, (score / d.max) * 100));
+    const pct = Math.max(0, Math.min(100, (score / max) * 100));
     const color = noData ? '#445' : (pct >= 70 ? 'var(--go)' : pct >= 40 ? 'var(--warn)' : 'var(--stop)');
-    const displayScore = noData ? '—' : `${score}/${d.max}`;
+    const displayScore = noData ? '—' : `${score}/${max}`;
     return `<div class="layer-row">
       <span class="layer-name">${d.name}</span>
       <div class="layer-bar-bg"><div class="layer-bar-fill" style="width:${pct}%;background:${color}"></div></div>
@@ -809,9 +815,37 @@ function tradeRowPnl(h, isOpen) {
   return { value: pnl, label: `${pnl >= 0 ? '+' : ''}$${pnl.toFixed(0)}`, isWin: pnl > 0 };
 }
 
+function renderHolidayBanner(py) {
+  // Show a top-of-page banner when the market is closed for a known reason.
+  // Prevents user confusion when score=0 and all values show "--" on holidays.
+  const el = document.getElementById('holidayBanner');
+  if (!el) return;
+  const h = py.holiday_info;
+  if (!h || !h.is_closed_day || py.market_status === 'regular') {
+    el.style.display = 'none';
+    return;
+  }
+  let title, body;
+  if (h.is_holiday) {
+    title = `🎉 ${h.name} — US Market Closed`;
+    body = 'NYSE/CME 휴장. 모든 가격·점수 데이터는 마지막 거래일 기준이며 라이브 시그널은 비활성 상태입니다.';
+  } else if (h.is_weekend) {
+    title = `📅 Weekend — US Market Closed`;
+    body = '주말 휴장. 다음 정규장에 다시 활성화됩니다.';
+  } else {
+    title = `🌙 After Hours — US Market Closed`;
+    body = '정규장 외 시간. 라이브 시그널은 정규장(9:30~16:00 ET)에 작동합니다.';
+  }
+  el.style.display = 'block';
+  el.innerHTML = `<div style="font-size:1rem;margin-bottom:4px">${title}</div><div style="font-size:0.7rem;color:var(--muted);font-weight:400">${body}</div>`;
+}
+
 function render(py) {
   document.getElementById('syncTime').textContent = py.last_updated + ' ET';
   document.getElementById('latency').textContent = py.latency_ms + 'ms';
+
+  // Holiday / weekend banner (above everything else)
+  renderHolidayBanner(py);
   
   // Data Source Status (FlashAlpha, Alpaca, etc.)
   if (py.data_source) {
@@ -920,7 +954,7 @@ function render(py) {
       </div>
       <div class="strike-metric">
         <span class="strike-metric-label">🎯 Score</span>
-        <span class="strike-metric-value mono">${py.total_score||0}/${py.max_score||110}</span>
+        <span class="strike-metric-value mono">${py.total_score||0}/100</span>
       </div>
       <div class="strike-metric">
         <span class="strike-metric-label">📈 VIX Regime</span>
@@ -932,11 +966,11 @@ function render(py) {
       </div>
       <div class="strike-metric">
         <span class="strike-metric-label">💰 Margin/Contract</span>
-        <span class="strike-metric-value mono">$500</span>
+        <span class="strike-metric-value mono">$${py.mes_specs?.day_margin || 50}</span>
       </div>
       <div class="strike-metric">
-        <span class="strike-metric-label">⚠️ Multiplier</span>
-        <span class="strike-metric-value mono" style="color:var(--warn)">$50/point</span>
+        <span class="strike-metric-label">⚡ Multiplier</span>
+        <span class="strike-metric-value mono" style="color:var(--warn)">$${py.mes_specs?.multiplier || 5}/point</span>
       </div>
     `;
 
@@ -1302,7 +1336,7 @@ function render(py) {
       canvas.width = canvas.offsetWidth * 2;
       canvas.height = 96;
       ctx.clearRect(0,0,canvas.width,canvas.height);
-      const pts = [pt.initial_balance || 2000];
+      const pts = [pt.initial_balance || 10000];
       sortedClosed.forEach(h => pts.push(pts[pts.length-1] + (h.realized_pnl||h.pnl||0)));
       const minV = Math.min(...pts), maxV = Math.max(...pts);
       const range = maxV - minV || 1;
@@ -1742,12 +1776,12 @@ function renderTradeList(hist, maxAbsPnl, filter) {
       ${!isOpen ? `<div style="background:rgba(255,255,255,0.03);border-radius:1px;height:2px;margin-top:5px;overflow:hidden"><div style="height:100%;width:${barWidth}%;background:${isWin?'var(--go)':'var(--stop)'};border-radius:1px;transition:width 0.6s"></div></div>` : ''}
       <div class="th-card-details">
         <div class="th-detail-grid">
-          <div class="th-detail-item"><span class="dlbl">Entry SPY</span><span class="dval">$${(h.entry_spy||0).toFixed?.(2) ?? '--'}</span></div>
-          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Exit SPY</span><span class="dval">$${(h.exit_spy||0).toFixed?.(2) ?? '--'}</span></div>` : ''}
-          <div class="th-detail-item"><span class="dlbl">Net Debit</span><span class="dval">$${(h.net_debit||0).toFixed?.(2) ?? '--'}</span></div>
-          <div class="th-detail-item"><span class="dlbl">Cost</span><span class="dval">$${(h.cost||0).toFixed?.(0) ?? '--'}</span></div>
-          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Revenue</span><span class="dval" style="color:${(h.revenue||0)>=(h.cost||0)?'var(--go)':'var(--stop)'}">$${(h.revenue||0).toFixed?.(0) ?? '--'}</span></div>` : ''}
-          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Exit Value</span><span class="dval">$${(h.exit_val||0).toFixed?.(2) ?? '--'}</span></div>` : ''}
+          <div class="th-detail-item"><span class="dlbl">Entry</span><span class="dval mono">${(h.entry_price||h.entry_spy||0).toFixed?.(2) ?? '--'}</span></div>
+          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Exit</span><span class="dval mono">${(h.exit_price||h.exit_spy||0).toFixed?.(2) ?? '--'}</span></div>` : ''}
+          <div class="th-detail-item"><span class="dlbl">Contracts</span><span class="dval mono">${h.contracts || 1}</span></div>
+          <div class="th-detail-item"><span class="dlbl">Margin</span><span class="dval mono">$${(h.margin_locked||0).toFixed?.(0) ?? '--'}</span></div>
+          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Pts P&L</span><span class="dval mono" style="color:${(h.point_pnl||0)>=0?'var(--go)':'var(--stop)'}">${(h.point_pnl||0)>=0?'+':''}${(h.point_pnl||0).toFixed?.(2) ?? '--'}</span></div>` : ''}
+          ${!isOpen ? `<div class="th-detail-item"><span class="dlbl">Exit Type</span><span class="dval">${h.exit_type||'--'}</span></div>` : ''}
         </div>
         ${renderTradeJournalEntry(h)}
       </div>
@@ -2159,11 +2193,6 @@ async function loadData() {
       // Nothing changed since last poll — just re-schedule.
       if (serverPollSec) startDataPolling(serverPollSec * 1000);
       return;
-    }
-
-    if (!r.ok) {
-      // Fallback for local/offline demo
-      r = await fetch('data.json', {cache:'no-store'});
     }
 
     if (r.ok) {
