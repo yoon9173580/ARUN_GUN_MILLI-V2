@@ -712,6 +712,40 @@ function renderLayerBars(layers) {
   }).join('');
 }
 
+// 1Hz local clock — keeps SYNC time ticking even when both /api/data
+// is returning 304s and the SSE stream is idle (e.g. closed market).
+// Started on first authenticated load. Server-supplied time overrides
+// this whenever a full 200 body arrives (render() runs).
+function startLocalClock() {
+  if (window.__localClockTimer) return;
+  window.__localClockTimer = setInterval(() => {
+    // Only tick if no recent server update (last render < 2s ago).
+    const sinceLast = performance.now() - (window.__lastServerRenderAt || 0);
+    if (sinceLast > 2000) tickHeartbeat();
+  }, 1000);
+}
+
+// Heartbeat tick — keeps the SYNC clock + latency moving on 304 polls
+// (where the full body isn't returned but the page is still active).
+// Adds a subtle '·' suffix on 304 so the operator can tell at a glance
+// whether the last update was a real change or a no-change poll.
+function tickHeartbeat(latencyMs) {
+  // Local NY clock — server isn't echoing last_updated on 304.
+  const nyNow = new Date().toLocaleString('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false, year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  }).replace(',', '');
+  // Format: 2026-05-29 09:56:42  (en-US locale gives MM/DD/YYYY HH:MM:SS,
+  // convert to YYYY-MM-DD)
+  const m = nyNow.match(/(\d+)\/(\d+)\/(\d+)\s+(\d+:\d+:\d+)/);
+  const formatted = m ? `${m[3]}-${m[1].padStart(2,'0')}-${m[2].padStart(2,'0')} ${m[4]}` : nyNow;
+  const syncEl = document.getElementById('syncTime');
+  if (syncEl) syncEl.textContent = formatted + ' ET ·';
+  const latEl = document.getElementById('latency');
+  if (latEl && latencyMs != null) latEl.textContent = Math.round(latencyMs) + 'ms';
+}
+
 // Entry diagnostic — explains *why* paper-trade hasn't fired.
 // Now shows both today's running peak AND the all-time peak
 // (samples + peak persist across days, never reset on rollover).
@@ -2262,6 +2296,9 @@ function startSSEStream() {
           const el = document.querySelector('[data-live-vix]');
           if (el) el.textContent = `VIX ${Number(data.vix).toFixed(2)}`;
         }
+        // Heartbeat the clock so users see the dashboard is alive
+        // even when /api/data is returning 304 between SSE frames.
+        tickHeartbeat();
       } catch(_) {}
     });
     es.onerror = () => {
@@ -2321,7 +2358,10 @@ async function loadData() {
     const serverPollSec = nextPollHeader ? Math.max(2, parseInt(nextPollHeader, 10)) : null;
 
     if (r.status === 304) {
-      // Nothing changed since last poll — just re-schedule.
+      // Signal unchanged — but still tick the visible clock so users
+      // can see the dashboard is alive. Previously syncTime froze on
+      // every 304 (most polls) because render() needs a body.
+      tickHeartbeat(performance.now() - t0);
       if (serverPollSec) startDataPolling(serverPollSec * 1000);
       return;
     }
@@ -2334,6 +2374,8 @@ async function loadData() {
       const data = await r.json();
       data.latency_ms = Math.round((data.latency_ms||0) + (performance.now()-t0));
       render(data);
+      window.__lastServerRenderAt = performance.now();
+      startLocalClock();
 
       // Show logout button now that we're properly authenticated in this tab
       const logoutBtn = document.getElementById('logoutBtn');
