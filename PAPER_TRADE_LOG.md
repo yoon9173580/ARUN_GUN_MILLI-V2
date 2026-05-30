@@ -23,7 +23,7 @@ Automated daily check writes to `ic_signal_log.csv`; this file is the **human-cu
 ## Status summary
 
 - **Started forward test**: 2026-05-26 (technically — but missed due to system being off)
-- **Paper account balance**: $1,000 (per `paper_portfolio.json`)
+- **Paper account balance**: $500,000 (per `paper_portfolio.json`)
 - **Trades executed**: 0
 - **Signals seen**: 0 (no fires that were caught live)
 - **Signals missed**: 1 (5/26 STRONG 95)

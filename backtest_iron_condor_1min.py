@@ -96,12 +96,12 @@ def simulate_ic_intraday(day_bars, K_sc, K_lc, K_sp, K_lp, credit_received,
     return eod_val * (1 + spread_pct) + slip4, "EOD", last_bar["time_of_day"]
 
 
-def run_ic_backtest(start_date=None, end_date=None, balance=2000.0,
+def run_ic_backtest(start_date=None, end_date=None, balance=500000.0,
                     min_score=90, tp_pct=0.50, sl_pct=1.00,
                     short_offset=3, wing_width=5,
                     regime_filter="none", min_grade="STRONG",
                     slip_multiplier=1.0, ml_model_path=None,
-                    ml_threshold=None):
+                    ml_threshold=None, max_contracts=20):
     # ML filter setup (optional)
     ml_bundle = None
     if ml_model_path:
@@ -281,6 +281,7 @@ def run_ic_backtest(start_date=None, end_date=None, balance=2000.0,
         risk_pct = 0.10 if score >= 95 else (0.08 if vix_val >= 25 else (0.06 if vix_val >= 20 else 0.05))
         max_risk_dollars = balance * risk_pct
         num_contracts = max(1, int(max_risk_dollars / max_loss_per_contract))
+        num_contracts = min(num_contracts, max_contracts)  # liquidity cap for 0DTE
 
         # Simulate intraday
         close_cost, exit_note, exit_time = simulate_ic_intraday(
@@ -397,7 +398,8 @@ def run_ic_backtest(start_date=None, end_date=None, balance=2000.0,
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("dates", nargs="*")
-    parser.add_argument("--balance",      type=float, default=2000.0)
+    parser.add_argument("--balance",      type=float, default=500000.0)
+    parser.add_argument("--max-contracts", type=int, default=20, help="Liquidity cap on 0DTE IC contracts (default 20)")
     parser.add_argument("--min-score",    type=int,   default=90)
     parser.add_argument("--tp",           type=float, default=0.50, help="Take profit at 1 - tp_pct of credit (default 0.50 = close at half credit)")
     parser.add_argument("--sl",           type=float, default=1.00, help="Stop loss when cost = (1+sl)*credit, capped at wing")
@@ -427,4 +429,5 @@ if __name__ == "__main__":
         slip_multiplier=args.slip_mult,
         ml_model_path=args.ml_model,
         ml_threshold=args.ml_threshold,
+        max_contracts=args.max_contracts,
     )

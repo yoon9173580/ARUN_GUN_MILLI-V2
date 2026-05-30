@@ -26,7 +26,7 @@ except Exception as e:
 
 
 
-STARTING_BALANCE = 10000.0
+STARTING_BALANCE = 500000.0
 TRADING_START_DATE = "2026-05-25"   # Day 1 of MES futures paper trading
 
 # MES Futures Contract Specs

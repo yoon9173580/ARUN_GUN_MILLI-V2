@@ -88,7 +88,7 @@ def score_day(row, vix, qqq_pct, iwm_pct, adx, rsi):
     return norm_score, grade, d
 
 
-def run_backtest(days=30, balance=2000.0):
+def run_backtest(days=30, balance=500000.0):
     print("=" * 80)
     print("  SPY 0DTE BACKTEST v3 — DEBIT SPREADS + VIX SIZING + SMART ENTRY")
     print("=" * 80)

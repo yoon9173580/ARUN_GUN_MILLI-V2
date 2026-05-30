@@ -232,7 +232,7 @@ def simulate_intraday(day_bars, K_buy, K_sell, net_debit, opt, iv, r,
 
 
 # ── Main backtest ─────────────────────────────────────────────────
-def run_backtest(start_date=None, end_date=None, balance=2000.0,
+def run_backtest(start_date=None, end_date=None, balance=500000.0,
                  min_score=90, tp_pct=1.00, sl_pct=1.00, spread_width=5,
                  direction_mode="cum_vwap", regime_filter="none",
                  vix_max=None, vix_min=None):
@@ -558,7 +558,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="SPY 0DTE 1-min precise options backtest")
     parser.add_argument("dates", nargs="*", help="Optional: start_date [end_date] (YYYY-MM-DD)")
-    parser.add_argument("--balance",   type=float, default=2000.0, help="Starting balance ($)")
+    parser.add_argument("--balance",   type=float, default=500000.0, help="Starting balance ($)")
     parser.add_argument("--min-score", type=int,   default=90,     help="Minimum score for entry")
     parser.add_argument("--tp",        type=float, default=1.00,   help="Take profit (fraction of debit, 1.00 = +100%)")
     parser.add_argument("--sl",        type=float, default=1.00,   help="Stop loss (fraction of debit, 1.00 = no SL)")

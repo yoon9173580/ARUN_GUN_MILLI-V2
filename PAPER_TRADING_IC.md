@@ -52,15 +52,22 @@ Forward test is non-negotiable.
 
 ---
 
-## Position Sizing (paper trading $5K-10K account)
+## Position Sizing ($500K paper trading account)
 
-| Account | Risk/trade | Contracts (typical $300 max loss IC) |
-|---|---|---|
-| $5,000 | 5% = $250 | 1 contract (round down) |
-| $10,000 | 5% = $500 | 1-2 contracts |
-| $25,000 | 5% = $1,250 | 4 contracts |
+| Account | Risk/trade (5%) | Theoretical contracts ($300 max loss IC) | Practical cap |
+|---|---|---|---|
+| $5,000 | $250 | 0 (force 1) | 1 |
+| $10,000 | $500 | 1 | 1 |
+| $25,000 | $1,250 | 4 | 4 |
+| $100,000 | $5,000 | 16 | 16 |
+| **$500,000** (current) | **$25,000** | **83** | **20** |
 
-**Cap: 5 contracts** regardless of account size. 0DTE liquidity ≠ infinite.
+**Liquidity cap: 20 contracts** (4-leg = 80 leg-contracts simultaneously). 0DTE SPY at ATM has ~1000-5000 daily volume per strike — 20 contracts is the comfortable ceiling. Larger sizes face material slippage scaling.
+
+At $500K with 20-contract cap:
+- Effective risk per trade: 20 × $300 = $6,000 = **1.2% of account**
+- Per-trade win (TP at 75% credit kept): 20 × $150 = $3,000 = 0.6% account
+- Expected daily PnL: ~$1.5K-$3K on signal days (vs $6K worst case loss)
 
 ---
 
@@ -125,9 +132,10 @@ Use Google Sheets or simple CSV. Track these fields → calculate weekly PF.
 - Any VIX-30+ day where signal fired and we lost — confirms strategy fails in extreme vol
 
 ### Go-live capital
-- Start: $5,000 cash (small enough to lose without pain)
-- Sizing: 5% risk per trade, max 5 contracts
-- Scale up only if first 2 weeks live show PF > 2.0
+- Paper start: **$500,000** (per current `paper_portfolio.json`)
+- Sizing: 5% risk per trade, **20-contract liquidity cap**
+- Effective per-trade risk: 1.2% of account ($6K max loss / $500K)
+- Scale up sizing cap (toward 50 contracts) only if first 2 weeks show fill quality holds at 20
 
 ---
 
